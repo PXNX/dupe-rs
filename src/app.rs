@@ -59,6 +59,46 @@ pub enum ViewMode {
     Grid,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortColumn {
+    Filename,
+    Size,
+    Modified,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+/// Which file within a duplicate group a bulk-selection action should target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectCriterion {
+    Oldest,
+    Newest,
+    ShortestPath,
+    LongestPath,
+}
+
+impl SelectCriterion {
+    pub const ALL: [SelectCriterion; 4] = [
+        SelectCriterion::Oldest,
+        SelectCriterion::Newest,
+        SelectCriterion::ShortestPath,
+        SelectCriterion::LongestPath,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SelectCriterion::Oldest => "Oldest",
+            SelectCriterion::Newest => "Newest",
+            SelectCriterion::ShortestPath => "Shortest path",
+            SelectCriterion::LongestPath => "Longest path",
+        }
+    }
+}
+
 pub struct DeleteConfirmState {
     pub paths: Vec<PathBuf>,
     pub total_size: u64,
@@ -82,6 +122,10 @@ pub struct DupeApp {
     pub extension_mode: ExtensionMode,
     pub extension_text: String,
 
+    pub sort: Option<(SortColumn, SortDirection)>,
+    pub select_criterion: SelectCriterion,
+    pub select_invert: bool,
+
     pub delete_confirm: Option<DeleteConfirmState>,
 }
 
@@ -101,6 +145,9 @@ impl Default for DupeApp {
             size_unit: SizeUnit::MB,
             extension_mode: ExtensionMode::All,
             extension_text: String::new(),
+            sort: None,
+            select_criterion: SelectCriterion::Oldest,
+            select_invert: false,
             delete_confirm: None,
         }
     }
@@ -196,6 +243,49 @@ impl DupeApp {
         self.selection = visible.into_iter().map(|f| f.path.clone()).collect();
     }
 
+    /// For each group, finds the file matching `criterion` and adds it to the
+    /// selection — or, with `invert`, adds every *other* file in the group
+    /// instead (e.g. "select everything except the oldest", to keep the
+    /// oldest and delete the rest).
+    pub fn select_by_criterion(&mut self, criterion: SelectCriterion, invert: bool) {
+        for group in &self.groups {
+            let target_idx = match criterion {
+                SelectCriterion::Oldest => group
+                    .files
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, f)| f.modified)
+                    .map(|(i, _)| i),
+                SelectCriterion::Newest => group
+                    .files
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, f)| f.modified)
+                    .map(|(i, _)| i),
+                SelectCriterion::ShortestPath => group
+                    .files
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, f)| f.path.as_os_str().len())
+                    .map(|(i, _)| i),
+                SelectCriterion::LongestPath => group
+                    .files
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, f)| f.path.as_os_str().len())
+                    .map(|(i, _)| i),
+            };
+            let Some(target_idx) = target_idx else {
+                continue;
+            };
+            for (i, file) in group.files.iter().enumerate() {
+                if (i == target_idx) != invert {
+                    self.selection.insert(file.path.clone());
+                }
+            }
+        }
+    }
+
     pub fn delete_selected(&mut self) {
         if self.selection.is_empty() {
             return;
@@ -272,6 +362,10 @@ impl eframe::App for DupeApp {
         let escape = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if escape {
             self.selection.clear();
+        }
+        let delete_key = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Delete));
+        if delete_key {
+            self.delete_selected();
         }
 
         crate::ui::settings_panel::show(self, ui);

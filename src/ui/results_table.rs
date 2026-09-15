@@ -1,10 +1,13 @@
-use crate::app::DupeApp;
+use crate::app::{DupeApp, SortColumn, SortDirection};
+use crate::model::DupeGroup;
 use chrono::{DateTime, Local};
-use egui::Ui;
+use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
 use std::time::SystemTime;
+
+const GROUP_GAP_HEIGHT: f32 = 8.0;
 
 fn format_modified(t: SystemTime) -> String {
     let dt: DateTime<Local> = t.into();
@@ -13,6 +16,69 @@ fn format_modified(t: SystemTime) -> String {
 
 fn hex_prefix(hash: &[u8; 32]) -> String {
     hash[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Renders a header label that cycles Asc -> Desc -> unsorted on each click,
+/// showing an arrow when it's the active sort column.
+fn sort_header(
+    ui: &mut Ui,
+    label: &str,
+    column: SortColumn,
+    sort: &mut Option<(SortColumn, SortDirection)>,
+) {
+    let arrow = match sort {
+        Some((c, SortDirection::Asc)) if *c == column => " \u{25B2}",
+        Some((c, SortDirection::Desc)) if *c == column => " \u{25BC}",
+        _ => "",
+    };
+    if ui
+        .add(egui::Button::new(format!("{label}{arrow}")).frame(false))
+        .clicked()
+    {
+        *sort = match sort {
+            Some((c, SortDirection::Asc)) if *c == column => Some((column, SortDirection::Desc)),
+            Some((c, SortDirection::Desc)) if *c == column => None,
+            _ => Some((column, SortDirection::Asc)),
+        };
+    }
+}
+
+/// Orders groups by the given column/direction using each group's original
+/// (index 0) file as the representative — individual files within a group
+/// keep their original-first order so the "original" highlighting still
+/// makes sense.
+fn ordered_groups(
+    groups: &[DupeGroup],
+    sort: Option<(SortColumn, SortDirection)>,
+) -> Vec<&DupeGroup> {
+    let mut ordered: Vec<&DupeGroup> = groups.iter().collect();
+    if let Some((column, direction)) = sort {
+        ordered.sort_by(|a, b| {
+            let ord = match column {
+                SortColumn::Filename => {
+                    let a_name = a.files[0]
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    let b_name = b.files[0]
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    a_name.cmp(&b_name)
+                }
+                SortColumn::Size => a.files[0].size.cmp(&b.files[0].size),
+                SortColumn::Modified => a.files[0].modified.cmp(&b.files[0].modified),
+            };
+            if direction == SortDirection::Desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+    }
+    ordered
 }
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
@@ -24,35 +90,34 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     }
 
     let mut toggled: Vec<PathBuf> = Vec::new();
+    let mut open_path: Option<PathBuf> = None;
 
     TableBuilder::new(ui)
         .id_salt("results_table")
         .striped(true)
         .column(Column::auto().at_least(24.0))
-        .column(Column::remainder().at_least(200.0))
-        .column(Column::auto().at_least(80.0))
-        .column(Column::auto().at_least(120.0))
-        .column(Column::auto().at_least(60.0))
+        .column(Column::remainder().at_least(200.0).resizable(true))
+        .column(Column::auto().at_least(80.0).resizable(true))
+        .column(Column::auto().at_least(120.0).resizable(true))
         .header(20.0, |mut header| {
             header.col(|ui| {
                 ui.label("");
             });
             header.col(|ui| {
-                ui.label("Filename");
+                sort_header(ui, "Filename", SortColumn::Filename, &mut app.sort);
             });
             header.col(|ui| {
-                ui.label("Size");
+                sort_header(ui, "Size", SortColumn::Size, &mut app.sort);
             });
             header.col(|ui| {
-                ui.label("Modified");
-            });
-            header.col(|ui| {
-                ui.label("Group");
+                sort_header(ui, "Modified", SortColumn::Modified, &mut app.sort);
             });
         })
         .body(|mut body| {
-            for (group_idx, group) in app.groups.iter().enumerate() {
-                let skip = if app.only_show_duplicates { 1 } else { 0 };
+            let ordered = ordered_groups(&app.groups, app.sort);
+            let skip = if app.only_show_duplicates { 1 } else { 0 };
+            let last_group = ordered.len().saturating_sub(1);
+            for (group_pos, group) in ordered.into_iter().enumerate() {
                 for (file_idx, file) in group.files.iter().enumerate().skip(skip) {
                     let is_original = file_idx == 0;
                     let mut checked = app.selection.contains(&file.path);
@@ -68,13 +133,17 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                 .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default();
-                            if is_original {
-                                ui.colored_label(
-                                    egui::Color32::LIGHT_GREEN,
-                                    format!("{name}  [Original]"),
-                                );
+                            let text = if is_original {
+                                egui::RichText::new(format!("{name}  [Original]"))
+                                    .color(egui::Color32::LIGHT_GREEN)
                             } else {
-                                ui.label(name);
+                                egui::RichText::new(name)
+                            };
+                            let response = ui.add(egui::Label::new(text).sense(Sense::click()));
+                            let response = response
+                                .on_hover_text(format!("hash: {}", hex_prefix(&group.hash)));
+                            if response.double_clicked() {
+                                open_path = Some(file.path.clone());
                             }
                         });
                         row.col(|ui| {
@@ -83,10 +152,14 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         row.col(|ui| {
                             ui.label(format_modified(file.modified));
                         });
-                        row.col(|ui| {
-                            ui.label((group_idx + 1).to_string())
-                                .on_hover_text(format!("hash: {}", hex_prefix(&group.hash)));
-                        });
+                    });
+                }
+
+                if group_pos != last_group {
+                    body.row(GROUP_GAP_HEIGHT, |mut row| {
+                        for _ in 0..4 {
+                            row.col(|_ui| {});
+                        }
                     });
                 }
             }
@@ -96,5 +169,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         if !app.selection.remove(&path) {
             app.selection.insert(path);
         }
+    }
+
+    if let Some(path) = open_path
+        && let Err(err) = open::that(&path)
+    {
+        app.status_message = Some(format!("Couldn't open {}: {err}", path.display()));
     }
 }

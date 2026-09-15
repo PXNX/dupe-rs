@@ -1,10 +1,29 @@
-use crate::app::{DupeApp, ViewMode};
+use crate::app::{DupeApp, SelectCriterion, ViewMode};
 use crate::selection::compute_visible_entries;
 use egui::{Panel, Ui};
 use humansize::{DECIMAL, format_size};
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     Panel::bottom("status_bar").show(ui, |ui| {
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label("Select per group:");
+            egui::ComboBox::from_id_salt("select_criterion")
+                .selected_text(app.select_criterion.label())
+                .show_ui(ui, |ui| {
+                    for criterion in SelectCriterion::ALL {
+                        ui.selectable_value(
+                            &mut app.select_criterion,
+                            criterion,
+                            criterion.label(),
+                        );
+                    }
+                });
+            ui.checkbox(&mut app.select_invert, "Invert (select all others)");
+            if ui.button("Apply").clicked() {
+                app.select_by_criterion(app.select_criterion, app.select_invert);
+            }
+        });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             let visible = compute_visible_entries(&app.groups, app.only_show_duplicates);
