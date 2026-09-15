@@ -8,6 +8,30 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+/// Byte-level progress of the full-file hashing pass, the slow, I/O-bound
+/// part of a scan on large trees. Used to show a GB-scanned readout and ETA.
+pub struct HashProgress {
+    pub total_bytes: u64,
+    pub done_bytes: u64,
+    pub started_at: Instant,
+}
+
+impl HashProgress {
+    pub fn eta(&self) -> Option<std::time::Duration> {
+        if self.done_bytes == 0 || self.done_bytes >= self.total_bytes {
+            return None;
+        }
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let rate = self.done_bytes as f64 / elapsed;
+        if rate <= 0.0 {
+            return None;
+        }
+        let remaining = (self.total_bytes - self.done_bytes) as f64;
+        Some(std::time::Duration::from_secs_f64(remaining / rate))
+    }
+}
 
 pub enum ScanState {
     Idle,
@@ -15,6 +39,7 @@ pub enum ScanState {
         rx: Receiver<ScanEvent>,
         cancel: Arc<AtomicBool>,
         scanned: usize,
+        hash_progress: Option<HashProgress>,
     },
     Done {
         elapsed_ms: u128,
@@ -114,6 +139,7 @@ impl DupeApp {
             rx,
             cancel,
             scanned: 0,
+            hash_progress: None,
         };
     }
 
@@ -128,11 +154,29 @@ impl DupeApp {
     fn drain_scan_events(&mut self) -> bool {
         let mut changed = false;
         let mut new_state = None;
-        if let ScanState::Running { rx, scanned, .. } = &mut self.scan_state {
+        if let ScanState::Running {
+            rx,
+            scanned,
+            hash_progress,
+            ..
+        } = &mut self.scan_state
+        {
             for event in rx.try_iter().take(200) {
                 changed = true;
                 match event {
                     ScanEvent::Progress { scanned: s } => *scanned = s,
+                    ScanEvent::HashPhaseStarted { total_bytes } => {
+                        *hash_progress = Some(HashProgress {
+                            total_bytes,
+                            done_bytes: 0,
+                            started_at: Instant::now(),
+                        });
+                    }
+                    ScanEvent::HashProgress { bytes_done } => {
+                        if let Some(progress) = hash_progress {
+                            progress.done_bytes = bytes_done;
+                        }
+                    }
                     ScanEvent::GroupFound(group) => self.groups.push(group),
                     ScanEvent::Done { elapsed_ms } => {
                         new_state = Some(ScanState::Done { elapsed_ms })

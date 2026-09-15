@@ -17,8 +17,21 @@ pub struct DupeGroup {
 
 #[derive(Clone, Debug)]
 pub enum ScanEvent {
-    Progress { scanned: usize },
+    Progress {
+        scanned: usize,
+    },
+    /// Sent once, right before the (slow) full-file hashing pass begins, once
+    /// the total bytes that pass need reading is known.
+    HashPhaseStarted {
+        total_bytes: u64,
+    },
+    /// Cumulative bytes hashed so far during the full-file hashing pass.
+    HashProgress {
+        bytes_done: u64,
+    },
     GroupFound(DupeGroup),
-    Done { elapsed_ms: u128 },
+    Done {
+        elapsed_ms: u128,
+    },
     Error(String),
 }

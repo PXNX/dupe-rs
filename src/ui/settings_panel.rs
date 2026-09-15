@@ -1,6 +1,31 @@
-use crate::app::{DupeApp, ExtensionMode, ScanState};
+use crate::app::{DupeApp, ExtensionMode, HashProgress, ScanState};
 use crate::config::SizeUnit;
 use egui::{Panel, Ui};
+use humansize::{DECIMAL, format_size};
+use std::time::Duration;
+
+fn format_eta(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+fn hash_progress_text(progress: &HashProgress) -> String {
+    let done = format_size(progress.done_bytes, DECIMAL);
+    let total = format_size(progress.total_bytes, DECIMAL);
+    match progress.eta() {
+        Some(eta) => format!("Hashed {done} / {total} — ETA {}", format_eta(eta)),
+        None if progress.done_bytes >= progress.total_bytes && progress.total_bytes > 0 => {
+            format!("Hashed {done} / {total} — finishing up...")
+        }
+        None => format!("Hashed {done} / {total} — estimating..."),
+    }
+}
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     Panel::top("settings_panel").show(ui, |ui| {
@@ -76,9 +101,16 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
             }
 
             match &app.scan_state {
-                ScanState::Running { scanned, .. } => {
+                ScanState::Running {
+                    scanned,
+                    hash_progress,
+                    ..
+                } => {
                     ui.spinner();
-                    ui.label(format!("Scanned {scanned} files..."));
+                    match hash_progress {
+                        Some(progress) => ui.label(hash_progress_text(progress)),
+                        None => ui.label(format!("Scanned {scanned} files...")),
+                    };
                 }
                 ScanState::Done { elapsed_ms } => {
                     ui.label(format!(

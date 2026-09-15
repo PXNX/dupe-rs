@@ -8,7 +8,7 @@ use crossbeam_channel::Sender;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Orchestrates a full scan: walk & filter, group by size, narrow with a cheap
@@ -47,14 +47,36 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBoo
         .filter(|v| v.len() > 1)
         .collect();
 
+    // The full-file hash pass is the slow, I/O-bound part on large trees, so
+    // report byte-level progress (used by the UI for a GB-scanned/ETA readout)
+    // rather than just a file count.
+    let total_hash_bytes: u64 = by_partial.iter().flatten().map(|f| f.size).sum();
+    let _ = tx.send(ScanEvent::HashPhaseStarted {
+        total_bytes: total_hash_bytes,
+    });
+    let hash_bytes_done = AtomicU64::new(0);
+    let last_reported = AtomicU64::new(0);
+    let report_threshold = (total_hash_bytes / 200).max(4 * 1024 * 1024);
+
     by_partial.into_par_iter().for_each(|files| {
         if cancel.load(Ordering::Relaxed) {
             return;
         }
         let mut by_full: HashMap<[u8; 32], Vec<FileEntry>> = HashMap::new();
         for f in files {
+            let size = f.size;
             if let Ok(h) = hash::full_hash(&f.path) {
                 by_full.entry(h).or_default().push(f);
+            }
+
+            let done = hash_bytes_done.fetch_add(size, Ordering::Relaxed) + size;
+            let prev = last_reported.load(Ordering::Relaxed);
+            if done.saturating_sub(prev) >= report_threshold
+                && last_reported
+                    .compare_exchange(prev, done, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                let _ = tx.send(ScanEvent::HashProgress { bytes_done: done });
             }
         }
         for (hash, mut group_files) in by_full {
@@ -67,6 +89,12 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBoo
             }
         }
     });
+
+    if total_hash_bytes > 0 {
+        let _ = tx.send(ScanEvent::HashProgress {
+            bytes_done: total_hash_bytes,
+        });
+    }
 
     let _ = tx.send(ScanEvent::Done {
         elapsed_ms: start.elapsed().as_millis(),
