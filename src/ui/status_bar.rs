@@ -1,4 +1,4 @@
-use crate::app::DupeApp;
+use crate::app::{DupeApp, ViewMode};
 use crate::selection::compute_visible_entries;
 use egui::{Panel, Ui};
 use humansize::{DECIMAL, format_size};
@@ -18,6 +18,10 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 .filter(|f| app.selection.contains(&f.path))
                 .map(|f| f.size)
                 .sum();
+
+            ui.selectable_value(&mut app.view_mode, ViewMode::Table, "Table");
+            ui.selectable_value(&mut app.view_mode, ViewMode::Grid, "Grid");
+            ui.separator();
 
             ui.checkbox(&mut app.only_show_duplicates, "Only show duplicates");
             ui.separator();

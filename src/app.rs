@@ -2,6 +2,7 @@ use crate::config::{ExtensionFilter, ScanConfig, SizeUnit, parse_extension_list}
 use crate::model::{DupeGroup, ScanEvent};
 use crate::scanner;
 use crate::selection::compute_visible_entries;
+use crate::ui::thumbnails::ThumbnailCache;
 use crossbeam_channel::Receiver;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -27,6 +28,12 @@ pub enum ExtensionMode {
     Exclude,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewMode {
+    Table,
+    Grid,
+}
+
 pub struct DeleteConfirmState {
     pub paths: Vec<PathBuf>,
     pub total_size: u64,
@@ -35,10 +42,12 @@ pub struct DeleteConfirmState {
 pub struct DupeApp {
     pub config: ScanConfig,
     pub only_show_duplicates: bool,
+    pub view_mode: ViewMode,
     pub groups: Vec<DupeGroup>,
     pub selection: HashSet<PathBuf>,
     pub scan_state: ScanState,
     pub status_message: Option<String>,
+    pub thumbnail_cache: ThumbnailCache,
 
     // Settings-panel transient UI state (raw text kept separately so users can
     // type freely; parsed into `config` only when a scan starts).
@@ -56,10 +65,12 @@ impl Default for DupeApp {
         Self {
             config: ScanConfig::default(),
             only_show_duplicates: false,
+            view_mode: ViewMode::Table,
             groups: Vec::new(),
             selection: HashSet::new(),
             scan_state: ScanState::Idle,
             status_message: None,
+            thumbnail_cache: ThumbnailCache::new(),
             min_size_text: String::new(),
             max_size_text: String::new(),
             size_unit: SizeUnit::MB,
@@ -223,8 +234,9 @@ impl eframe::App for DupeApp {
         crate::ui::status_bar::show(self, ui);
         crate::ui::delete_confirm::show(self, &ctx);
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            crate::ui::results_table::show(self, ui);
+        egui::CentralPanel::default().show(ui, |ui| match self.view_mode {
+            ViewMode::Table => crate::ui::results_table::show(self, ui),
+            ViewMode::Grid => crate::ui::results_grid::show(self, ui),
         });
     }
 }
