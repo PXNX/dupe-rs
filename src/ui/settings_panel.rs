@@ -34,6 +34,19 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(icons::ICON_FOLDER_SPECIAL.rich_text().size(20.0));
             ui.heading("dupe-rs");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new(RichText::from(format!(
+                        "{} GitHub",
+                        icons::ICON_OPEN_IN_NEW.codepoint
+                    ))).frame(false))
+                    .on_hover_text("Open the dupe-rs repository on GitHub")
+                    .clicked()
+                    && let Err(err) = open::that("https://github.com/PXNX/dupe-rs")
+                {
+                    app.status_message = Some(format!("Couldn't open GitHub page: {err}"));
+                }
+            });
         });
         ui.add_space(4.0);
 
