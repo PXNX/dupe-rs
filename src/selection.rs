@@ -1,4 +1,4 @@
-use crate::model::{DupeGroup, FileEntry};
+use crate::model::{DupeGroup, FileEntry, MediaEntry, SimilarGroup};
 use crate::namematch;
 
 /// Single source of truth for which files are currently "visible" given the
@@ -9,6 +9,24 @@ pub fn compute_visible_entries<'a>(
     groups: impl IntoIterator<Item = &'a DupeGroup>,
     only_show_duplicates: bool,
 ) -> Vec<&'a FileEntry> {
+    groups
+        .into_iter()
+        .flat_map(|g| {
+            if only_show_duplicates {
+                g.files[1..].iter()
+            } else {
+                g.files[..].iter()
+            }
+        })
+        .collect()
+}
+
+/// Same idea as `compute_visible_entries`, for `ScanMode::SimilarMedia`
+/// results (`SimilarGroup`/`MediaEntry` instead of `DupeGroup`/`FileEntry`).
+pub fn compute_visible_media_entries<'a>(
+    groups: impl IntoIterator<Item = &'a SimilarGroup>,
+    only_show_duplicates: bool,
+) -> Vec<&'a MediaEntry> {
     groups
         .into_iter()
         .flat_map(|g| {

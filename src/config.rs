@@ -18,6 +18,16 @@ impl ExtensionFilter {
     }
 }
 
+/// Which notion of "duplicate" a scan looks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanMode {
+    /// Byte-identical content, found via content hashing.
+    ExactContent,
+    /// Images/videos that look like the same shot at a different resolution
+    /// (re-encodes, resizes, thumbnails), found via perceptual hashing.
+    SimilarMedia,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
     pub folders: Vec<PathBuf>,
@@ -26,6 +36,10 @@ pub struct ScanConfig {
     pub min_size: Option<u64>,    // bytes
     pub max_size: Option<u64>,    // bytes
     pub extensions: ExtensionFilter,
+    pub mode: ScanMode,
+    /// Max Hamming distance (out of 64 bits) between two perceptual hashes to
+    /// still count as the same picture, only used in `ScanMode::SimilarMedia`.
+    pub similarity_threshold: u32,
 }
 
 impl Default for ScanConfig {
@@ -37,6 +51,8 @@ impl Default for ScanConfig {
             min_size: None,
             max_size: None,
             extensions: ExtensionFilter::All,
+            mode: ScanMode::ExactContent,
+            similarity_threshold: 10,
         }
     }
 }

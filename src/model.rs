@@ -16,6 +16,27 @@ pub struct DupeGroup {
     pub files: Vec<FileEntry>,
 }
 
+/// An image or video file considered by `ScanMode::SimilarMedia`. Decoded
+/// dimensions are what let that mode pick the highest-resolution copy as the
+/// original, unlike `ScanMode::ExactContent`'s oldest-file rule.
+#[derive(Clone, Debug)]
+pub struct MediaEntry {
+    pub path: PathBuf,
+    pub size: u64,
+    pub created: SystemTime,
+    pub modified: SystemTime,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A cluster of images/videos that look like the same shot at different
+/// resolutions. Sorted so that `files[0]` is the "original": highest
+/// resolution first, oldest `modified` as a tiebreaker.
+#[derive(Clone, Debug)]
+pub struct SimilarGroup {
+    pub files: Vec<MediaEntry>,
+}
+
 #[derive(Clone, Debug)]
 pub enum ScanEvent {
     Progress {
@@ -31,8 +52,19 @@ pub enum ScanEvent {
         bytes_done: u64,
     },
     GroupFound(DupeGroup),
+    SimilarGroupFound(SimilarGroup),
     Done {
         elapsed_ms: u128,
     },
     Error(String),
+}
+
+/// Progress from a background trash-deletion, so a large selection doesn't
+/// freeze the UI or leave the user staring at nothing.
+#[derive(Clone, Debug)]
+pub enum DeleteEvent {
+    /// One file has been (attempted to be) deleted; `deleted` is false if it
+    /// was missing or the trash call failed.
+    FileDone { path: PathBuf, deleted: bool },
+    Finished,
 }

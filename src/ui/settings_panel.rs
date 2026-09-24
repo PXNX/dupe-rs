@@ -1,6 +1,6 @@
-use crate::app::{DupeApp, ExtensionMode, HashProgress, ScanState};
-use crate::config::SizeUnit;
-use egui::{Panel, RichText, Ui};
+use crate::app::{DupeApp, ExtensionMode, HashProgress, ScanState, ViewMode};
+use crate::config::{ScanMode, SizeUnit};
+use egui::{Align, Layout, Panel, RichText, Ui};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 use std::time::Duration;
@@ -34,6 +34,37 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(icons::ICON_FOLDER_SPECIAL.rich_text().size(20.0));
             ui.heading("dupe-rs");
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label(icons::ICON_DIFFERENCE.rich_text());
+            ui.label("Find:");
+            ui.radio_value(
+                &mut app.config.mode,
+                ScanMode::ExactContent,
+                "Exact duplicates",
+            )
+            .on_hover_text("Byte-identical files, found via content hashing.");
+            ui.radio_value(
+                &mut app.config.mode,
+                ScanMode::SimilarMedia,
+                "Similar media (any resolution)",
+            )
+            .on_hover_text(
+                "Images/videos that look like the same shot saved at a different resolution, \
+                 found via perceptual hashing. The highest-resolution (then oldest) copy is kept \
+                 as the original. Video comparison needs ffmpeg on PATH.",
+            );
+            if app.config.mode == ScanMode::SimilarMedia {
+                ui.separator();
+                ui.label("Similarity:");
+                ui.add(
+                    egui::Slider::new(&mut app.config.similarity_threshold, 0..=30)
+                        .text("max hash distance"),
+                )
+                .on_hover_text("Lower = stricter match, higher = allows more visual difference.");
+            }
         });
         ui.add_space(4.0);
 
@@ -121,6 +152,9 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
+            // The right-aligned view-mode switch is added last (see below):
+            // a `right_to_left` child placed first would claim the whole row
+            // for itself and push every later widget off past the right edge.
             let scanning = app.is_scanning();
             let can_scan = !app.config.folders.is_empty() && !scanning;
             if scanning {
@@ -167,12 +201,38 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 }
                 ScanState::Idle => {}
             }
+
+            // View-mode switch anchored to the right edge of the scan row;
+            // only meaningful once exact-match results are showing (the
+            // similar-media mode only has a table view so far).
+            if app.active_mode == ScanMode::ExactContent {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.selectable_value(
+                        &mut app.view_mode,
+                        ViewMode::Grid,
+                        RichText::from(format!("{} Grid", icons::ICON_GRID_VIEW.codepoint)),
+                    );
+                    ui.selectable_value(
+                        &mut app.view_mode,
+                        ViewMode::Table,
+                        RichText::from(format!("{} Table", icons::ICON_TABLE.codepoint)),
+                    );
+                });
+            }
         });
 
-        if !app.groups.is_empty() {
-            ui.add_space(4.0);
-            ui.separator();
-            crate::ui::stats_panel::show(ui, &app.groups);
+        match app.active_mode {
+            ScanMode::ExactContent if !app.groups.is_empty() => {
+                ui.add_space(4.0);
+                ui.separator();
+                crate::ui::stats_panel::show(ui, &app.groups);
+            }
+            ScanMode::SimilarMedia if !app.similar_groups.is_empty() => {
+                ui.add_space(4.0);
+                ui.separator();
+                crate::ui::stats_panel::show_similar(ui, &app.similar_groups);
+            }
+            _ => {}
         }
 
         ui.add_space(4.0);

@@ -1,45 +1,51 @@
-use crate::app::{DupeApp, SortColumn, SortDirection};
-use crate::model::DupeGroup;
-use crate::selection::filter_by_name_pattern;
-use crate::ui::format::{format_timestamp, hex_prefix};
+use crate::app::DupeApp;
+use crate::model::SimilarGroup;
+use crate::ui::format::format_timestamp;
 use egui::{Color32, Sense, Stroke, Ui};
 use egui_extras::{Column, TableBuilder};
-use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
 
 const GROUP_GAP_HEIGHT: f32 = 8.0;
 
 /// Indices, within a group's files, of the row that "wins" each highlighted
-/// column — drawn in bold so a glance shows which copy is largest/oldest,
-/// independent of which one is the overall `[Original]`.
+/// column — drawn in bold so a glance shows which copy is largest/highest-res
+/// /oldest, independent of which one is the overall `[Original]`.
 struct GroupHighlights {
     largest_size: usize,
+    highest_resolution: usize,
     oldest_created: usize,
     oldest_modified: usize,
 }
 
 impl GroupHighlights {
-    fn compute(group: &DupeGroup) -> Self {
-        let by = |key: fn(&crate::model::FileEntry) -> _| {
+    fn compute(group: &SimilarGroup) -> Self {
+        let max_by = |key: fn(&crate::model::MediaEntry) -> u64| {
             group
                 .files
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, f)| key(f))
+                .max_by_key(|(_, f)| key(f))
                 .map(|(i, _)| i)
                 .unwrap_or(0)
         };
         Self {
-            largest_size: group
+            largest_size: max_by(|f| f.size),
+            highest_resolution: max_by(|f| f.width as u64 * f.height as u64),
+            oldest_created: group
                 .files
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, f)| f.size)
+                .min_by_key(|(_, f)| f.created)
                 .map(|(i, _)| i)
                 .unwrap_or(0),
-            oldest_created: by(|f| f.created),
-            oldest_modified: by(|f| f.modified),
+            oldest_modified: group
+                .files
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, f)| f.modified)
+                .map(|(i, _)| i)
+                .unwrap_or(0),
         }
     }
 }
@@ -49,77 +55,17 @@ fn cell_text(text: String, is_winner: bool) -> egui::RichText {
     if is_winner { rt.strong() } else { rt }
 }
 
-/// Renders a header label that cycles Asc -> Desc -> unsorted on each click,
-/// showing an arrow when it's the active sort column.
-fn sort_header(
-    ui: &mut Ui,
-    label: &str,
-    column: SortColumn,
-    sort: &mut Option<(SortColumn, SortDirection)>,
-) {
-    let arrow = match sort {
-        Some((c, SortDirection::Asc)) if *c == column => icons::ICON_ARROW_UPWARD.codepoint,
-        Some((c, SortDirection::Desc)) if *c == column => icons::ICON_ARROW_DOWNWARD.codepoint,
-        _ => "",
-    };
-    let text = if arrow.is_empty() {
-        label.to_string()
-    } else {
-        format!("{label} {arrow}")
-    };
-    if ui.add(egui::Button::new(text).frame(false)).clicked() {
-        *sort = match sort {
-            Some((c, SortDirection::Asc)) if *c == column => Some((column, SortDirection::Desc)),
-            Some((c, SortDirection::Desc)) if *c == column => None,
-            _ => Some((column, SortDirection::Asc)),
-        };
-    }
-}
-
-/// Orders groups by the given column/direction using each group's original
-/// (index 0) file as the representative — individual files within a group
-/// keep their original-first order so the "original" highlighting still
-/// makes sense.
-fn ordered_groups(
-    groups: Vec<&DupeGroup>,
-    sort: Option<(SortColumn, SortDirection)>,
-) -> Vec<&DupeGroup> {
-    let mut ordered = groups;
-    if let Some((column, direction)) = sort {
-        ordered.sort_by(|a, b| {
-            let ord = match column {
-                SortColumn::Filename => {
-                    let a_name = a.files[0]
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    let b_name = b.files[0]
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    a_name.cmp(&b_name)
-                }
-                SortColumn::Path => a.files[0].path.cmp(&b.files[0].path),
-                SortColumn::Size => a.files[0].size.cmp(&b.files[0].size),
-                SortColumn::Created => a.files[0].created.cmp(&b.files[0].created),
-                SortColumn::Modified => a.files[0].modified.cmp(&b.files[0].modified),
-            };
-            if direction == SortDirection::Desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
-    }
-    ordered
-}
-
+/// Table for `ScanMode::SimilarMedia` results: same checkbox/group-divider
+/// treatment as the exact-match table, plus a Resolution column, but no
+/// column sorting or grid view (a picture grid over a totally different
+/// grouping shape wasn't worth the added complexity for this first pass).
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
-    if app.groups.is_empty() {
+    if app.similar_groups.is_empty() {
         ui.centered_and_justified(|ui| {
-            ui.label("No duplicate groups yet. Add folders above and click Scan.");
+            ui.label(
+                "No similar-media groups yet. Add folders above and click Scan \
+                 (mode: Similar media).",
+            );
         });
         return;
     }
@@ -129,11 +75,12 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     let table_x_range = ui.max_rect().x_range();
 
     TableBuilder::new(ui)
-        .id_salt("results_table")
+        .id_salt("results_table_similar")
         .striped(true)
         .column(Column::auto().at_least(24.0))
         .column(Column::remainder().at_least(160.0).resizable(true))
         .column(Column::remainder().at_least(200.0).resizable(true))
+        .column(Column::auto().at_least(100.0).resizable(true))
         .column(Column::auto().at_least(80.0).resizable(true))
         .column(Column::auto().at_least(120.0).resizable(true))
         .column(Column::auto().at_least(120.0).resizable(true))
@@ -142,27 +89,29 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 ui.label("");
             });
             header.col(|ui| {
-                sort_header(ui, "Filename", SortColumn::Filename, &mut app.sort);
+                ui.label("Filename");
             });
             header.col(|ui| {
-                sort_header(ui, "Path", SortColumn::Path, &mut app.sort);
+                ui.label("Path");
             });
             header.col(|ui| {
-                sort_header(ui, "Size", SortColumn::Size, &mut app.sort);
+                ui.label("Resolution");
             });
             header.col(|ui| {
-                sort_header(ui, "Created", SortColumn::Created, &mut app.sort);
+                ui.label("Size");
             });
             header.col(|ui| {
-                sort_header(ui, "Modified", SortColumn::Modified, &mut app.sort);
+                ui.label("Created");
+            });
+            header.col(|ui| {
+                ui.label("Modified");
             });
         })
         .body(|mut body| {
-            let filtered = filter_by_name_pattern(&app.groups, app.only_show_name_copies);
-            let ordered = ordered_groups(filtered, app.sort);
+            let groups: &[SimilarGroup] = &app.similar_groups;
             let skip = if app.only_show_duplicates { 1 } else { 0 };
-            let last_group = ordered.len().saturating_sub(1);
-            for (group_pos, group) in ordered.into_iter().enumerate() {
+            let last_group = groups.len().saturating_sub(1);
+            for (group_pos, group) in groups.iter().enumerate() {
                 let highlights = GroupHighlights::compute(group);
                 for (file_idx, file) in group.files.iter().enumerate().skip(skip) {
                     let is_original = file_idx == 0;
@@ -186,8 +135,6 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                 egui::RichText::new(name)
                             };
                             let response = ui.add(egui::Label::new(text).sense(Sense::click()));
-                            let response = response
-                                .on_hover_text(format!("hash: {}", hex_prefix(&group.hash)));
                             if response.double_clicked() {
                                 open_path = Some(file.path.clone());
                             }
@@ -200,6 +147,12 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                 .unwrap_or_default();
                             ui.add(egui::Label::new(parent).truncate())
                                 .on_hover_text(file.path.display().to_string());
+                        });
+                        row.col(|ui| {
+                            ui.label(cell_text(
+                                format!("{}×{}", file.width, file.height),
+                                file_idx == highlights.highest_resolution,
+                            ));
                         });
                         row.col(|ui| {
                             ui.label(cell_text(
@@ -225,10 +178,6 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 if group_pos != last_group {
                     body.row(GROUP_GAP_HEIGHT, |mut row| {
                         row.col(|ui| {
-                            // Painted via an unclipped layer painter spanning the
-                            // whole table width: each column's own `ui` is
-                            // clipped to its own rect, so a line drawn per-column
-                            // would show visible gaps at each column boundary.
                             let y = ui.max_rect().center().y;
                             ui.ctx().layer_painter(ui.layer_id()).hline(
                                 table_x_range,

@@ -5,7 +5,7 @@
 //! the same way a browser-based E2E test queries the DOM and dispatches
 //! events, just for an egui window instead of a web page.
 
-use dupe_rs::app::{DupeApp, ScanState};
+use dupe_rs::app::{DupeApp, ScanState, ViewMode};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -39,6 +39,24 @@ fn wait_for_scan_done(harness: &mut Harness<'static, DupeApp>) {
             return;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "scan timed out");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Steps the harness until the background trash-deletion thread reports it's
+/// finished (the confirm dialog closed and nothing left running). Real
+/// Windows Recycle Bin operations go through shell/COM machinery that can
+/// serialize heavily when several tests hit it around the same time under
+/// `cargo test`'s default parallelism, so this budget is generous compared to
+/// the sub-second time a couple of file deletions take in isolation.
+fn wait_for_delete_done(harness: &mut Harness<'static, DupeApp>) {
+    let start = Instant::now();
+    loop {
+        harness.step();
+        if harness.state().delete_confirm.is_none() && !harness.state().is_deleting() {
+            return;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30), "delete timed out");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -110,6 +128,8 @@ fn select_all_then_delete_key_confirms_and_moves_files_to_trash() {
     assert!(harness.state().delete_confirm.is_some());
 
     harness.get_by_label("Delete").click();
+    harness.step();
+    wait_for_delete_done(&mut harness);
     harness.run();
 
     assert!(harness.state().delete_confirm.is_none());
@@ -145,4 +165,38 @@ fn same_folder_only_checkbox_excludes_cross_folder_matches_live() {
         harness.state().groups.is_empty(),
         "toggling 'Same folder only' must drop the cross-folder match"
     );
+}
+
+#[test]
+fn bulk_selection_buttons_and_view_mode_toggle_are_clickable() {
+    // Regression test: these controls once sat right after a right-aligned
+    // `right_to_left` block placed *earlier* in the same row, which claims
+    // the rest of the row for itself and pushes every later widget off past
+    // the right edge — so clicks silently landed nowhere. Every widget here
+    // must actually be clickable at its reported position.
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("a.txt"), b"duplicate payload").unwrap();
+    fs::write(dir.path().join("b.txt"), b"duplicate payload").unwrap();
+
+    let mut harness = harness();
+    harness.state_mut().config.folders.push(dir.path().to_path_buf());
+    harness.run();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+
+    harness
+        .get_by_label_contains("Select All Shown")
+        .click();
+    harness.step();
+    assert_eq!(harness.state().selection.len(), 2);
+
+    harness.get_by_label_contains("Select None").click();
+    harness.step();
+    assert!(harness.state().selection.is_empty());
+
+    assert_eq!(harness.state().view_mode, ViewMode::Table);
+    harness.get_by_label_contains("Grid").click();
+    harness.run();
+    assert_eq!(harness.state().view_mode, ViewMode::Grid);
 }

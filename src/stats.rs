@@ -1,4 +1,4 @@
-use crate::model::DupeGroup;
+use crate::model::{DupeGroup, SimilarGroup};
 
 /// Aggregate numbers derived from the current duplicate groups, shown in the
 /// statistics section so the user can see scan results at a glance.
@@ -14,6 +14,23 @@ pub struct ScanStats {
 /// `group.files[0]` is always the "original"; every other file in the group is
 /// a reclaimable duplicate, so wasted space is each duplicate's own size.
 pub fn compute(groups: &[DupeGroup]) -> ScanStats {
+    let mut stats = ScanStats::default();
+    for group in groups {
+        stats.group_count += 1;
+        stats.total_file_count += group.files.len();
+        for file in &group.files {
+            stats.total_bytes += file.size;
+        }
+        for file in &group.files[1..] {
+            stats.duplicate_file_count += 1;
+            stats.wasted_bytes += file.size;
+        }
+    }
+    stats
+}
+
+/// Same as `compute`, for `ScanMode::SimilarMedia` results.
+pub fn compute_similar(groups: &[SimilarGroup]) -> ScanStats {
     let mut stats = ScanStats::default();
     for group in groups {
         stats.group_count += 1;

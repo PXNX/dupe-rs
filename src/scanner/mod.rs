@@ -1,8 +1,9 @@
 mod group;
 mod hash;
+mod similarity;
 mod walk;
 
-use crate::config::ScanConfig;
+use crate::config::{ScanConfig, ScanMode};
 use crate::model::{DupeGroup, FileEntry, ScanEvent};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
@@ -11,10 +12,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-/// Orchestrates a full scan: walk & filter, group by size, narrow with a cheap
-/// partial-hash pass, then confirm with a full-file hash. Intended to run on a
-/// background thread; `cancel` is polled between phases and inside the walk.
+/// Entry point for a background scan; dispatches to the exact-content or
+/// similar-media pipeline depending on `config.mode`.
 pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBool>) {
+    match config.mode {
+        ScanMode::ExactContent => run_exact_scan(config, tx, cancel),
+        ScanMode::SimilarMedia => similarity::run_similarity_scan(config, tx, cancel),
+    }
+}
+
+/// Orchestrates a full exact-content scan: walk & filter, group by size,
+/// narrow with a cheap partial-hash pass, then confirm with a full-file hash.
+/// Intended to run on a background thread; `cancel` is polled between phases
+/// and inside the walk.
+fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBool>) {
     let start = Instant::now();
     let candidates = walk::walk_and_filter(&config, &cancel, &tx);
 
@@ -113,7 +124,6 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBoo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ExtensionFilter;
     use crossbeam_channel::unbounded;
     use std::fs;
     use tempfile::tempdir;
@@ -135,11 +145,7 @@ mod tests {
 
         let config = ScanConfig {
             folders: vec![dir.path().to_path_buf()],
-            exclude_subfolders: false,
-            same_folder_only: false,
-            min_size: None,
-            max_size: None,
-            extensions: ExtensionFilter::All,
+            ..ScanConfig::default()
         };
 
         let (tx, rx) = unbounded();

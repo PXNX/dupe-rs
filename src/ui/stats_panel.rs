@@ -1,11 +1,18 @@
-use crate::model::DupeGroup;
-use crate::stats;
+use crate::model::{DupeGroup, SimilarGroup};
+use crate::stats::{self, ScanStats};
 use egui::Ui;
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 
 pub fn show(ui: &mut Ui, groups: &[DupeGroup]) {
-    let s = stats::compute(groups);
+    show_stats(ui, stats::compute(groups));
+}
+
+pub fn show_similar(ui: &mut Ui, groups: &[SimilarGroup]) {
+    show_stats(ui, stats::compute_similar(groups));
+}
+
+fn show_stats(ui: &mut Ui, s: ScanStats) {
     ui.horizontal(|ui| {
         stat(ui, icons::ICON_LAYERS, "Groups", s.group_count.to_string());
         ui.separator();

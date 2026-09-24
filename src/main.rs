@@ -1,3 +1,7 @@
+// Release builds run as a GUI app with no console window; debug builds keep
+// the console attached so `println!`/panics are still visible while developing.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use dupe_rs::app::DupeApp;
 
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
