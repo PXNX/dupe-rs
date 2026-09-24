@@ -1,7 +1,10 @@
 mod group;
 mod hash;
+pub mod indexer;
 mod similarity;
 mod walk;
+
+pub use hash::full_hash;
 
 use crate::config::{ScanConfig, ScanMode};
 use crate::model::{DupeGroup, FileEntry, ScanEvent};

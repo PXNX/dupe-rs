@@ -1,5 +1,6 @@
 use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_extension_list};
 use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
+use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
 use crate::ui::thumbnails::ThumbnailCache;
@@ -69,6 +70,15 @@ pub enum ExtensionMode {
 pub enum ViewMode {
     Table,
     Grid,
+}
+
+/// Top-level section the window is showing: the regular duplicate scan, or
+/// the reverse-search tab (pick one file, find its matches in a persisted,
+/// previously-built index).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppTab {
+    Scan,
+    ReverseSearch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +218,9 @@ pub struct DupeApp {
 
     pub delete_confirm: Option<DeleteConfirmState>,
     pub delete_state: DeleteState,
+
+    pub tab: AppTab,
+    pub reverse_search: ReverseSearchState,
 }
 
 impl Default for DupeApp {
@@ -236,6 +249,9 @@ impl Default for DupeApp {
             select_invert: false,
             delete_confirm: None,
             delete_state: DeleteState::Idle,
+
+            tab: AppTab::Scan,
+            reverse_search: ReverseSearchState::default(),
         }
     }
 }
@@ -525,31 +541,49 @@ impl eframe::App for DupeApp {
             self.refresh_exact_rows_cache();
         }
 
-        let wants_keyboard = ctx.egui_wants_keyboard_input();
-        let ctrl_a =
-            !wants_keyboard && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A));
-        if ctrl_a {
-            self.select_ctrl_a();
-        }
-        let escape = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if escape {
-            self.selection.clear();
-        }
-        let delete_key = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Delete));
-        if delete_key {
-            self.delete_selected();
+        if self.reverse_search.is_indexing() {
+            let changed = self.reverse_search.drain_index_events();
+            if changed {
+                ctx.request_repaint();
+            }
+            if self.reverse_search.is_indexing() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
         }
 
-        crate::ui::settings_panel::show(self, ui);
-        crate::ui::status_bar::show(self, ui);
-        crate::ui::delete_confirm::show(self, &ctx);
+        crate::ui::tab_bar::show(self, ui);
 
-        egui::CentralPanel::default().show(ui, |ui| match self.active_mode {
-            ScanMode::SimilarMedia => crate::ui::results_table_similar::show(self, ui),
-            ScanMode::ExactContent => match self.view_mode {
-                ViewMode::Table => crate::ui::results_table::show(self, ui),
-                ViewMode::Grid => crate::ui::results_grid::show(self, ui),
-            },
-        });
+        if self.tab == AppTab::Scan {
+            let wants_keyboard = ctx.egui_wants_keyboard_input();
+            let ctrl_a = !wants_keyboard
+                && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A));
+            if ctrl_a {
+                self.select_ctrl_a();
+            }
+            let escape = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+            if escape {
+                self.selection.clear();
+            }
+            let delete_key = !wants_keyboard && ctx.input(|i| i.key_pressed(egui::Key::Delete));
+            if delete_key {
+                self.delete_selected();
+            }
+
+            crate::ui::settings_panel::show(self, ui);
+            crate::ui::status_bar::show(self, ui);
+            crate::ui::delete_confirm::show(self, &ctx);
+
+            egui::CentralPanel::default().show(ui, |ui| match self.active_mode {
+                ScanMode::SimilarMedia => crate::ui::results_table_similar::show(self, ui),
+                ScanMode::ExactContent => match self.view_mode {
+                    ViewMode::Table => crate::ui::results_table::show(self, ui),
+                    ViewMode::Grid => crate::ui::results_grid::show(self, ui),
+                },
+            });
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| {
+                crate::ui::reverse_search_panel::show(self, ui);
+            });
+        }
     }
 }

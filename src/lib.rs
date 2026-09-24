@@ -1,9 +1,12 @@
 pub mod app;
 pub mod config;
+pub mod index_db;
 pub mod model;
 pub mod namematch;
+pub mod reverse_search;
 pub mod scanner;
 pub mod selection;
 pub mod stats;
 pub mod ui;
 pub mod view_cache;
+pub mod volume;

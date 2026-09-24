@@ -5,7 +5,7 @@
 //! the same way a browser-based E2E test queries the DOM and dispatches
 //! events, just for an egui window instead of a web page.
 
-use dupe_rs::app::{DupeApp, ScanState, ViewMode};
+use dupe_rs::app::{AppTab, DupeApp, ScanState, ViewMode};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -199,4 +199,66 @@ fn bulk_selection_buttons_and_view_mode_toggle_are_clickable() {
     harness.get_by_label_contains("Grid").click();
     harness.run();
     assert_eq!(harness.state().view_mode, ViewMode::Grid);
+}
+
+#[test]
+fn reverse_search_tab_switches_the_central_panel_and_back() {
+    let mut harness = harness();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::Scan);
+
+    harness.get_by_label_contains("Reverse Search").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::ReverseSearch);
+    assert!(harness.query_by_label_contains("Find matches for a file").is_some());
+    assert!(harness.query_by_label_contains("Index folders").is_some());
+
+    harness.get_by_label_contains("Duplicates").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::Scan);
+}
+
+#[test]
+fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
+    // Uses its own temp index file rather than the real
+    // %LOCALAPPDATA%\dupe-rs\reverse_index.json — indexing a drive replaces
+    // that drive's prior entries, and this test must not clobber a real
+    // index a user has already built on whatever drive `TEMP` happens to be.
+    let db_dir = tempdir().unwrap();
+    let dir = tempdir().unwrap();
+    let indexed = dir.path().join("original.txt");
+    fs::write(&indexed, b"reverse search payload").unwrap();
+
+    let mut harness = harness();
+    harness.state_mut().tab = dupe_rs::app::AppTab::ReverseSearch;
+    harness.state_mut().reverse_search =
+        dupe_rs::reverse_search::ReverseSearchState::new(db_dir.path().join("index.json"));
+    harness.state_mut().reverse_search.index_folders.push(dir.path().to_path_buf());
+    harness.run();
+
+    harness.state_mut().reverse_search.start_indexing();
+    let start = Instant::now();
+    loop {
+        harness.step();
+        if !harness.state().reverse_search.is_indexing() {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "indexing timed out");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    harness.run();
+
+    assert!(harness.state().reverse_search.db.total_files() >= 1);
+
+    let picked = dir.path().join("picked_copy.txt");
+    fs::write(&picked, b"reverse search payload").unwrap();
+    harness.state_mut().reverse_search.pick_file(picked);
+    harness.run();
+
+    assert_eq!(harness.state().reverse_search.results.len(), 1);
+    // rel_path is relative to the volume root (not the scanned folder), so
+    // the match's reconstructed absolute path should round-trip back to the
+    // indexed file.
+    let matched = &harness.state().reverse_search.results[0];
+    assert_eq!(matched.absolute_path(), indexed);
 }
