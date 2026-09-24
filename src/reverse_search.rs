@@ -112,18 +112,19 @@ impl ReverseSearchState {
 
         if let Some((entries, elapsed_ms)) = finished {
             let file_count = entries.len();
-            let mut by_drive: HashMap<String, Vec<(String, IndexedFile)>> = HashMap::new();
+            let mut by_volume: HashMap<(String, String), Vec<(String, IndexedFile)>> = HashMap::new();
             for (hash_hex, file) in entries {
-                by_drive.entry(file.drive_letter.clone()).or_default().push((hash_hex, file));
+                let key = (file.drive_letter.clone(), file.volume_label.clone());
+                by_volume.entry(key).or_default().push((hash_hex, file));
             }
-            let drive_count = by_drive.len();
-            for (drive, drive_entries) in by_drive {
-                self.db.reindex_drive(&drive, drive_entries);
+            let drive_count = by_volume.len();
+            for ((drive, label), volume_entries) in by_volume {
+                self.db.reindex_volume(&drive, &label, volume_entries);
             }
             self.status = Some(match self.db.save(&self.db_path) {
                 Ok(()) => format!(
-                    "Indexed {file_count} file(s) across {drive_count} drive(s) in {:.2}s.",
-                    elapsed_ms as f64 / 1000.0
+                    "Indexed {file_count} file(s) across {drive_count} drive(s) in {}.",
+                    crate::ui::format::format_duration_hms(elapsed_ms)
                 ),
                 Err(err) => format!("Indexed {file_count} file(s) but failed to save the index: {err}"),
             });
@@ -156,10 +157,11 @@ impl ReverseSearchState {
             }
         };
         let drive_letter = crate::volume::drive_letter_of(&path);
+        let volume_label = crate::volume::volume_info(&drive_letter).label;
         let root = format!("{drive_letter}\\");
         let rel_path = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
         let probe = IndexedFile {
-            volume_label: String::new(),
+            volume_label,
             drive_letter,
             rel_path,
             size: 0,

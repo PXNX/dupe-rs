@@ -59,12 +59,22 @@ impl IndexDb {
         std::fs::write(path, bytes)
     }
 
-    /// Replaces every previously indexed entry for `drive_letter` with
-    /// `new_entries`, so re-indexing a drive doesn't accumulate stale
-    /// duplicates of files that were since moved, renamed, or deleted.
-    pub fn reindex_drive(&mut self, drive_letter: &str, new_entries: Vec<(String, IndexedFile)>) {
+    /// Replaces every previously indexed entry for the *volume* identified by
+    /// `drive_letter` + `volume_label` with `new_entries`, so re-indexing a
+    /// drive doesn't accumulate stale duplicates of files that were since
+    /// moved, renamed, or deleted. Keying on the label as well as the letter
+    /// matters because a drive letter can end up hosting a different physical
+    /// disk later (e.g. plugging a different drive into `D:`) — that must not
+    /// silently erase the previous disk's entries, since it may still be
+    /// findable later under another letter.
+    pub fn reindex_volume(
+        &mut self,
+        drive_letter: &str,
+        volume_label: &str,
+        new_entries: Vec<(String, IndexedFile)>,
+    ) {
         for files in self.entries.values_mut() {
-            files.retain(|f| f.drive_letter != drive_letter);
+            files.retain(|f| !(f.drive_letter == drive_letter && f.volume_label == volume_label));
         }
         self.entries.retain(|_, files| !files.is_empty());
         for (hash_hex, file) in new_entries {
@@ -73,26 +83,33 @@ impl IndexDb {
     }
 
     /// Every indexed file with the given content hash, excluding `exclude`
-    /// itself (matched by drive letter + relative path, since that's what
-    /// identifies a specific indexed file).
+    /// itself (matched by volume identity + relative path, since a relative
+    /// path alone can collide across different volumes/drive letters).
     pub fn matches(&self, hash_hex: &str, exclude: &IndexedFile) -> Vec<&IndexedFile> {
         self.entries
             .get(hash_hex)
             .into_iter()
             .flatten()
-            .filter(|f| f.drive_letter != exclude.drive_letter || f.rel_path != exclude.rel_path)
+            .filter(|f| {
+                !(f.drive_letter == exclude.drive_letter
+                    && f.volume_label == exclude.volume_label
+                    && f.rel_path == exclude.rel_path)
+            })
             .collect()
     }
 
     /// Unique (drive_letter, volume_label) pairs currently represented in the
-    /// index, for showing the user what's been indexed so far.
+    /// index, for showing the user what's been indexed so far. A drive letter
+    /// can appear more than once here if it has hosted different labeled
+    /// volumes across separate indexing passes.
     pub fn indexed_drives(&self) -> Vec<(String, String)> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for files in self.entries.values() {
             for f in files {
-                if seen.insert(f.drive_letter.clone()) {
-                    out.push((f.drive_letter.clone(), f.volume_label.clone()));
+                let key = (f.drive_letter.clone(), f.volume_label.clone());
+                if seen.insert(key.clone()) {
+                    out.push(key);
                 }
             }
         }
@@ -115,8 +132,12 @@ mod tests {
     use std::time::Duration;
 
     fn file(drive: &str, rel: &str) -> IndexedFile {
+        file_on(drive, &format!("{drive}-label"), rel)
+    }
+
+    fn file_on(drive: &str, label: &str, rel: &str) -> IndexedFile {
         IndexedFile {
-            volume_label: format!("{drive}-label"),
+            volume_label: label.to_string(),
             drive_letter: drive.to_string(),
             rel_path: PathBuf::from(rel),
             size: 100,
@@ -125,12 +146,12 @@ mod tests {
     }
 
     #[test]
-    fn reindexing_a_drive_replaces_its_old_entries_but_keeps_other_drives() {
+    fn reindexing_a_volume_replaces_its_old_entries_but_keeps_other_drives() {
         let mut db = IndexDb::default();
-        db.reindex_drive("D:", vec![("hash1".to_string(), file("D:", "old.jpg"))]);
-        db.reindex_drive("E:", vec![("hash2".to_string(), file("E:", "keep.jpg"))]);
+        db.reindex_volume("D:", "D:-label", vec![("hash1".to_string(), file("D:", "old.jpg"))]);
+        db.reindex_volume("E:", "E:-label", vec![("hash2".to_string(), file("E:", "keep.jpg"))]);
 
-        db.reindex_drive("D:", vec![("hash3".to_string(), file("D:", "new.jpg"))]);
+        db.reindex_volume("D:", "D:-label", vec![("hash3".to_string(), file("D:", "new.jpg"))]);
 
         assert!(db.matches("hash1", &file("D:", "nonexistent")).is_empty());
         assert_eq!(db.matches("hash3", &file("D:", "nonexistent")).len(), 1);
@@ -138,10 +159,39 @@ mod tests {
     }
 
     #[test]
+    fn reindexing_a_letter_under_a_different_volume_label_keeps_the_old_volumes_entries() {
+        // Simulates unplugging one physical drive and plugging a different
+        // one into the same letter: re-indexing "D:" under the new label
+        // "data" must not wipe out what was indexed while "D:" was labeled
+        // "500GB-5", since that disk might still be found again later.
+        let mut db = IndexDb::default();
+        db.reindex_volume(
+            "D:",
+            "500GB-5",
+            vec![("hash1".to_string(), file_on("D:", "500GB-5", "old.jpg"))],
+        );
+
+        db.reindex_volume(
+            "D:",
+            "data",
+            vec![("hash2".to_string(), file_on("D:", "data", "new.jpg"))],
+        );
+
+        assert_eq!(db.matches("hash1", &file("D:", "nonexistent")).len(), 1);
+        assert_eq!(db.matches("hash2", &file("D:", "nonexistent")).len(), 1);
+        assert_eq!(
+            db.indexed_drives().len(),
+            2,
+            "both volumes that have ever lived on D: should still be listed"
+        );
+    }
+
+    #[test]
     fn matches_excludes_the_queried_file_itself() {
         let mut db = IndexDb::default();
-        db.reindex_drive(
+        db.reindex_volume(
             "D:",
+            "D:-label",
             vec![
                 ("hash1".to_string(), file("D:", "a.jpg")),
                 ("hash1".to_string(), file("D:", "b.jpg")),
@@ -154,12 +204,29 @@ mod tests {
     }
 
     #[test]
+    fn matches_does_not_exclude_a_same_named_file_on_a_different_volume() {
+        // Two different physical drives can share a drive letter over time
+        // and happen to contain a file at the same relative path; the
+        // "exclude self" filter must key off the volume label too, not just
+        // the letter + path, or it would wrongly drop a real match.
+        let mut db = IndexDb::default();
+        db.reindex_volume(
+            "D:",
+            "data",
+            vec![("hash1".to_string(), file_on("D:", "data", "a.jpg"))],
+        );
+
+        let results = db.matches("hash1", &file_on("D:", "500GB-5", "a.jpg"));
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
     fn save_and_load_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.json");
 
         let mut db = IndexDb::default();
-        db.reindex_drive("D:", vec![("hash1".to_string(), file("D:", "a.jpg"))]);
+        db.reindex_volume("D:", "D:-label", vec![("hash1".to_string(), file("D:", "a.jpg"))]);
         db.save(&path).unwrap();
 
         let loaded = IndexDb::load(&path);

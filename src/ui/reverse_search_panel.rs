@@ -178,7 +178,14 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
                         ui.label(format!("{} ({})", file.volume_label, file.drive_letter));
                     });
                     row.col(|ui| {
-                        let attached = file.absolute_path().exists();
+                        // Not just `path.exists()`: a different physical
+                        // drive can end up mounted under the same letter
+                        // (e.g. swapping what's plugged into D:), and its
+                        // files could coincidentally share a relative path
+                        // with something indexed from the original volume.
+                        let attached = crate::volume::volume_info(&file.drive_letter).label
+                            == file.volume_label
+                            && file.absolute_path().exists();
                         let text = if attached {
                             RichText::new(file.rel_path.display().to_string())
                         } else {

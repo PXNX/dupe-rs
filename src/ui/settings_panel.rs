@@ -207,9 +207,9 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 }
                 ScanState::Done { elapsed_ms } => {
                     ui.label(format!(
-                        "{} Done in {:.2}s",
+                        "{} Done in {}",
                         icons::ICON_CHECK_CIRCLE.codepoint,
-                        *elapsed_ms as f64 / 1000.0,
+                        crate::ui::format::format_duration_hms(*elapsed_ms),
                     ));
                 }
                 ScanState::Idle => {}
