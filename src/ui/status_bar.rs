@@ -1,10 +1,9 @@
 use crate::app::{DupeApp, SelectCriterion};
 use crate::config::ScanMode;
-use crate::selection::{compute_visible_entries, compute_visible_media_entries, filter_by_name_pattern};
+use crate::selection::compute_visible_media_entries;
 use egui::{Panel, RichText, Ui};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
-use std::path::PathBuf;
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     Panel::bottom("status_bar").show(ui, |ui| {
@@ -30,45 +29,35 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         });
         ui.add_space(2.0);
 
-        // `visible`'s exact type differs per mode (`&FileEntry` vs
-        // `&MediaEntry`), so read everything needed out of it into owned
-        // values up front rather than trying to unify the two types. Computed
-        // once here so both rows below (bulk-selection buttons and the
-        // trailing stats/delete row) can use it.
-        let (shown_size, visible_len, selected_count, selected_size, visible_paths) =
-            match app.active_mode {
-                ScanMode::ExactContent => {
-                    let filtered_groups =
-                        filter_by_name_pattern(&app.groups, app.only_show_name_copies);
-                    let visible = compute_visible_entries(filtered_groups, app.only_show_duplicates);
-                    let shown_size: u64 = visible.iter().map(|f| f.size).sum();
-                    let selected_count =
-                        visible.iter().filter(|f| app.selection.contains(&f.path)).count();
-                    let selected_size: u64 = visible
-                        .iter()
-                        .filter(|f| app.selection.contains(&f.path))
-                        .map(|f| f.size)
-                        .sum();
-                    let visible_paths: Vec<PathBuf> =
-                        visible.iter().map(|f| f.path.clone()).collect();
-                    (shown_size, visible.len(), selected_count, selected_size, visible_paths)
-                }
-                ScanMode::SimilarMedia => {
-                    let visible =
-                        compute_visible_media_entries(&app.similar_groups, app.only_show_duplicates);
-                    let shown_size: u64 = visible.iter().map(|f| f.size).sum();
-                    let selected_count =
-                        visible.iter().filter(|f| app.selection.contains(&f.path)).count();
-                    let selected_size: u64 = visible
-                        .iter()
-                        .filter(|f| app.selection.contains(&f.path))
-                        .map(|f| f.size)
-                        .sum();
-                    let visible_paths: Vec<PathBuf> =
-                        visible.iter().map(|f| f.path.clone()).collect();
-                    (shown_size, visible.len(), selected_count, selected_size, visible_paths)
-                }
-            };
+        // `exact_rows_cache` is already filtered/sorted (refreshed once per
+        // frame in `DupeApp::ui`, not here), so this only has to scan a
+        // ready-made list rather than re-filtering the whole result set.
+        let (shown_size, visible_len, selected_count, selected_size) = match app.active_mode {
+            ScanMode::ExactContent => {
+                let rows = &app.exact_rows_cache.rows;
+                let shown_size: u64 = rows.iter().map(|r| r.size).sum();
+                let selected_count = rows.iter().filter(|r| app.selection.contains(&r.path)).count();
+                let selected_size: u64 = rows
+                    .iter()
+                    .filter(|r| app.selection.contains(&r.path))
+                    .map(|r| r.size)
+                    .sum();
+                (shown_size, rows.len(), selected_count, selected_size)
+            }
+            ScanMode::SimilarMedia => {
+                let visible =
+                    compute_visible_media_entries(&app.similar_groups, app.only_show_duplicates);
+                let shown_size: u64 = visible.iter().map(|f| f.size).sum();
+                let selected_count =
+                    visible.iter().filter(|f| app.selection.contains(&f.path)).count();
+                let selected_size: u64 = visible
+                    .iter()
+                    .filter(|f| app.selection.contains(&f.path))
+                    .map(|f| f.size)
+                    .sum();
+                (shown_size, visible.len(), selected_count, selected_size)
+            }
+        };
 
         ui.horizontal(|ui| {
             ui.checkbox(&mut app.only_show_duplicates, "Only show duplicates");
@@ -88,8 +77,19 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 )))
                 .clicked()
             {
-                for path in &visible_paths {
-                    app.selection.insert(path.clone());
+                match app.active_mode {
+                    ScanMode::ExactContent => {
+                        for row in &app.exact_rows_cache.rows {
+                            app.selection.insert(row.path.clone());
+                        }
+                    }
+                    ScanMode::SimilarMedia => {
+                        for f in
+                            compute_visible_media_entries(&app.similar_groups, app.only_show_duplicates)
+                        {
+                            app.selection.insert(f.path.clone());
+                        }
+                    }
                 }
             }
             if ui

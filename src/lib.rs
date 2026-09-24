@@ -6,3 +6,4 @@ pub mod scanner;
 pub mod selection;
 pub mod stats;
 pub mod ui;
+pub mod view_cache;

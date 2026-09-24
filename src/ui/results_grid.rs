@@ -1,7 +1,7 @@
 use crate::app::DupeApp;
-use crate::selection::filter_by_name_pattern;
 use crate::ui::format::{format_timestamp, hex_prefix};
 use crate::ui::thumbnails::ThumbState;
+use crate::view_cache::RowInfo;
 use egui::{Color32, Sense, Stroke, Ui, vec2};
 use egui_material_icons::{MaterialIcon, icons};
 use humansize::{DECIMAL, format_size};
@@ -23,6 +23,24 @@ struct GridEntry {
     modified: SystemTime,
     hash: [u8; 32],
     is_original: bool,
+}
+
+impl From<&RowInfo> for GridEntry {
+    fn from(info: &RowInfo) -> Self {
+        Self {
+            path: info.path.clone(),
+            file_name: info
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            size: info.size,
+            created: info.created,
+            modified: info.modified,
+            hash: info.hash,
+            is_original: info.is_original,
+        }
+    }
 }
 
 /// A row of up to `columns` cells belonging to a single duplicate group. Groups
@@ -58,38 +76,27 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         0.0
     };
 
-    let skip = if app.only_show_duplicates { 1 } else { 0 };
-    let filtered = filter_by_name_pattern(&app.groups, app.only_show_name_copies);
+    // The cache is already filtered (name-copy pattern) and has
+    // `only_show_duplicates` applied, and its rows are grouped consecutively
+    // by `group_idx` — grouping them back up here (to chunk each group into
+    // rows of `columns` cells) is just a cheap linear scan, not a re-filter.
+    let cache_rows = &app.exact_rows_cache.rows;
     let mut rows: Vec<GridRow> = Vec::new();
-    for group in filtered {
-        let group_entries: Vec<GridEntry> = group
-            .files
-            .iter()
-            .enumerate()
-            .skip(skip)
-            .map(|(idx, f)| GridEntry {
-                path: f.path.clone(),
-                file_name: f
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                size: f.size,
-                created: f.created,
-                modified: f.modified,
-                hash: group.hash,
-                is_original: idx == 0,
-            })
-            .collect();
-        if group_entries.is_empty() {
-            continue;
+    let mut i = 0;
+    while i < cache_rows.len() {
+        let group_idx = cache_rows[i].group_idx;
+        let mut j = i + 1;
+        while j < cache_rows.len() && cache_rows[j].group_idx == group_idx {
+            j += 1;
         }
+        let group_entries: Vec<GridEntry> = cache_rows[i..j].iter().map(GridEntry::from).collect();
         for (chunk_idx, chunk) in group_entries.chunks(columns).enumerate() {
             rows.push(GridRow {
                 entries: chunk.to_vec(),
                 is_group_start: chunk_idx == 0,
             });
         }
+        i = j;
     }
 
     let mut toggled: Vec<PathBuf> = Vec::new();
@@ -107,7 +114,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     ui.painter().hline(
                         divider_rect.x_range(),
                         divider_rect.center().y,
-                        Stroke::new(3.0, Color32::from_gray(90)),
+                        Stroke::new(2.0, Color32::from_gray(90)),
                     );
                 }
 

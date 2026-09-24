@@ -1,48 +1,12 @@
 use crate::app::{DupeApp, SortColumn, SortDirection};
-use crate::model::DupeGroup;
-use crate::selection::filter_by_name_pattern;
 use crate::ui::format::{format_timestamp, hex_prefix};
-use egui::{Color32, Sense, Stroke, Ui};
+use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
 
-const GROUP_GAP_HEIGHT: f32 = 8.0;
-
-/// Indices, within a group's files, of the row that "wins" each highlighted
-/// column — drawn in bold so a glance shows which copy is largest/oldest,
-/// independent of which one is the overall `[Original]`.
-struct GroupHighlights {
-    largest_size: usize,
-    oldest_created: usize,
-    oldest_modified: usize,
-}
-
-impl GroupHighlights {
-    fn compute(group: &DupeGroup) -> Self {
-        let by = |key: fn(&crate::model::FileEntry) -> _| {
-            group
-                .files
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, f)| key(f))
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        };
-        Self {
-            largest_size: group
-                .files
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, f)| f.size)
-                .map(|(i, _)| i)
-                .unwrap_or(0),
-            oldest_created: by(|f| f.created),
-            oldest_modified: by(|f| f.modified),
-        }
-    }
-}
+const ROW_HEIGHT: f32 = 22.0;
 
 fn cell_text(text: String, is_winner: bool) -> egui::RichText {
     let rt = egui::RichText::new(text);
@@ -76,46 +40,12 @@ fn sort_header(
     }
 }
 
-/// Orders groups by the given column/direction using each group's original
-/// (index 0) file as the representative — individual files within a group
-/// keep their original-first order so the "original" highlighting still
-/// makes sense.
-fn ordered_groups(
-    groups: Vec<&DupeGroup>,
-    sort: Option<(SortColumn, SortDirection)>,
-) -> Vec<&DupeGroup> {
-    let mut ordered = groups;
-    if let Some((column, direction)) = sort {
-        ordered.sort_by(|a, b| {
-            let ord = match column {
-                SortColumn::Filename => {
-                    let a_name = a.files[0]
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    let b_name = b.files[0]
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    a_name.cmp(&b_name)
-                }
-                SortColumn::Path => a.files[0].path.cmp(&b.files[0].path),
-                SortColumn::Size => a.files[0].size.cmp(&b.files[0].size),
-                SortColumn::Created => a.files[0].created.cmp(&b.files[0].created),
-                SortColumn::Modified => a.files[0].modified.cmp(&b.files[0].modified),
-            };
-            if direction == SortDirection::Desc {
-                ord.reverse()
-            } else {
-                ord
-            }
-        });
-    }
-    ordered
-}
-
+/// Renders the exact-duplicates results as a table. Reads the pre-filtered,
+/// pre-sorted row list from `app.exact_rows_cache` (refreshed once per frame
+/// in `DupeApp::ui`, not rebuilt here) and hands it to `TableBody::rows`,
+/// which only constructs widgets for rows actually within the scrolled
+/// viewport — together these two things are what let this stay responsive
+/// on scans with hundreds of thousands of duplicate files.
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     if app.groups.is_empty() {
         ui.centered_and_justified(|ui| {
@@ -124,9 +54,9 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         return;
     }
 
+    let row_count = app.exact_rows_cache.rows.len();
     let mut toggled: Vec<PathBuf> = Vec::new();
     let mut open_path: Option<PathBuf> = None;
-    let table_x_range = ui.max_rect().x_range();
 
     TableBuilder::new(ui)
         .id_salt("results_table")
@@ -157,88 +87,56 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 sort_header(ui, "Modified", SortColumn::Modified, &mut app.sort);
             });
         })
-        .body(|mut body| {
-            let filtered = filter_by_name_pattern(&app.groups, app.only_show_name_copies);
-            let ordered = ordered_groups(filtered, app.sort);
-            let skip = if app.only_show_duplicates { 1 } else { 0 };
-            let last_group = ordered.len().saturating_sub(1);
-            for (group_pos, group) in ordered.into_iter().enumerate() {
-                let highlights = GroupHighlights::compute(group);
-                for (file_idx, file) in group.files.iter().enumerate().skip(skip) {
-                    let is_original = file_idx == 0;
-                    let mut checked = app.selection.contains(&file.path);
-                    body.row(22.0, |mut row| {
-                        row.col(|ui| {
-                            if ui.checkbox(&mut checked, "").changed() {
-                                toggled.push(file.path.clone());
-                            }
-                        });
-                        row.col(|ui| {
-                            let name = file
-                                .path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            let text = if is_original {
-                                egui::RichText::new(format!("{name}  [Original]"))
-                                    .color(egui::Color32::LIGHT_GREEN)
-                            } else {
-                                egui::RichText::new(name)
-                            };
-                            let response = ui.add(egui::Label::new(text).sense(Sense::click()));
-                            let response = response
-                                .on_hover_text(format!("hash: {}", hex_prefix(&group.hash)));
-                            if response.double_clicked() {
-                                open_path = Some(file.path.clone());
-                            }
-                        });
-                        row.col(|ui| {
-                            let parent = file
-                                .path
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default();
-                            ui.add(egui::Label::new(parent).truncate())
-                                .on_hover_text(file.path.display().to_string());
-                        });
-                        row.col(|ui| {
-                            ui.label(cell_text(
-                                format_size(file.size, DECIMAL),
-                                file_idx == highlights.largest_size,
-                            ));
-                        });
-                        row.col(|ui| {
-                            ui.label(cell_text(
-                                format_timestamp(file.created),
-                                file_idx == highlights.oldest_created,
-                            ));
-                        });
-                        row.col(|ui| {
-                            ui.label(cell_text(
-                                format_timestamp(file.modified),
-                                file_idx == highlights.oldest_modified,
-                            ));
-                        });
-                    });
+        .body(|body| {
+            body.rows(ROW_HEIGHT, row_count, |mut row| {
+                let info = &app.exact_rows_cache.rows[row.index()];
+                let mut checked = app.selection.contains(&info.path);
+                if info.is_group_start && row.index() != 0 {
+                    row.set_overline(true);
                 }
 
-                if group_pos != last_group {
-                    body.row(GROUP_GAP_HEIGHT, |mut row| {
-                        row.col(|ui| {
-                            // Painted via an unclipped layer painter spanning the
-                            // whole table width: each column's own `ui` is
-                            // clipped to its own rect, so a line drawn per-column
-                            // would show visible gaps at each column boundary.
-                            let y = ui.max_rect().center().y;
-                            ui.ctx().layer_painter(ui.layer_id()).hline(
-                                table_x_range,
-                                y,
-                                Stroke::new(1.5, Color32::from_gray(90)),
-                            );
-                        });
-                    });
-                }
-            }
+                row.col(|ui| {
+                    if ui.checkbox(&mut checked, "").changed() {
+                        toggled.push(info.path.clone());
+                    }
+                });
+                row.col(|ui| {
+                    let name = info
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let text = if info.is_original {
+                        egui::RichText::new(format!("{name}  [Original]"))
+                            .color(egui::Color32::LIGHT_GREEN)
+                    } else {
+                        egui::RichText::new(name)
+                    };
+                    let response = ui.add(egui::Label::new(text).sense(Sense::click()));
+                    let response = response.on_hover_text(format!("hash: {}", hex_prefix(&info.hash)));
+                    if response.double_clicked() {
+                        open_path = Some(info.path.clone());
+                    }
+                });
+                row.col(|ui| {
+                    let parent = info
+                        .path
+                        .parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    ui.add(egui::Label::new(parent).truncate())
+                        .on_hover_text(info.path.display().to_string());
+                });
+                row.col(|ui| {
+                    ui.label(cell_text(format_size(info.size, DECIMAL), info.is_largest_size));
+                });
+                row.col(|ui| {
+                    ui.label(cell_text(format_timestamp(info.created), info.is_oldest_created));
+                });
+                row.col(|ui| {
+                    ui.label(cell_text(format_timestamp(info.modified), info.is_oldest_modified));
+                });
+            });
         });
 
     for path in toggled {

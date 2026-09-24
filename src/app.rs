@@ -3,6 +3,7 @@ use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, Sim
 use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
 use crate::ui::thumbnails::ThumbnailCache;
+use crate::view_cache::ExactRowsCache;
 use crossbeam_channel::Receiver;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -179,6 +180,12 @@ pub struct DupeApp {
     pub view_mode: ViewMode,
     pub groups: Vec<DupeGroup>,
     pub similar_groups: Vec<SimilarGroup>,
+    /// Bumped every time `groups` is mutated (new group found, groups pruned
+    /// after a delete, scan restarted). `exact_rows_cache` is keyed on this
+    /// so it only rebuilds when the underlying data actually changed, rather
+    /// than every frame.
+    pub groups_generation: u64,
+    pub exact_rows_cache: ExactRowsCache,
     /// The `ScanMode` the currently-displayed results came from; set when a
     /// scan starts so mid-scan mode changes never mismatch results and views.
     pub active_mode: ScanMode,
@@ -212,6 +219,8 @@ impl Default for DupeApp {
             view_mode: ViewMode::Table,
             groups: Vec::new(),
             similar_groups: Vec::new(),
+            groups_generation: 0,
+            exact_rows_cache: ExactRowsCache::default(),
             active_mode: ScanMode::ExactContent,
             selection: HashSet::new(),
             scan_state: ScanState::Idle,
@@ -251,6 +260,7 @@ impl DupeApp {
 
         self.groups.clear();
         self.similar_groups.clear();
+        self.groups_generation += 1;
         self.active_mode = self.config.mode;
         self.selection.clear();
         self.status_message = None;
@@ -280,6 +290,7 @@ impl DupeApp {
     /// the UI thread), returning whether anything changed.
     fn drain_scan_events(&mut self) -> bool {
         let mut changed = false;
+        let mut groups_changed = false;
         let mut new_state = None;
         if let ScanState::Running {
             rx,
@@ -304,7 +315,10 @@ impl DupeApp {
                             progress.done_bytes = bytes_done;
                         }
                     }
-                    ScanEvent::GroupFound(group) => self.groups.push(group),
+                    ScanEvent::GroupFound(group) => {
+                        self.groups.push(group);
+                        groups_changed = true;
+                    }
                     ScanEvent::SimilarGroupFound(group) => self.similar_groups.push(group),
                     ScanEvent::Done { elapsed_ms } => {
                         new_state = Some(ScanState::Done { elapsed_ms })
@@ -313,21 +327,31 @@ impl DupeApp {
                 }
             }
         }
+        if groups_changed {
+            self.groups_generation += 1;
+        }
         if let Some(state) = new_state {
             self.scan_state = state;
         }
         changed
     }
 
+    /// Rebuilds `exact_rows_cache` if it's stale; a cheap no-op otherwise.
+    /// Called once per frame, before anything that reads the cache.
+    pub fn refresh_exact_rows_cache(&mut self) {
+        self.exact_rows_cache.refresh(
+            &self.groups,
+            self.groups_generation,
+            self.only_show_name_copies,
+            self.only_show_duplicates,
+            self.sort,
+        );
+    }
+
     pub fn select_ctrl_a(&mut self) {
         self.selection = match self.active_mode {
             ScanMode::ExactContent => {
-                let filtered =
-                    crate::selection::filter_by_name_pattern(&self.groups, self.only_show_name_copies);
-                compute_visible_entries(filtered, self.only_show_duplicates)
-                    .into_iter()
-                    .map(|f| f.path.clone())
-                    .collect()
+                self.exact_rows_cache.rows.iter().map(|r| r.path.clone()).collect()
             }
             ScanMode::SimilarMedia => compute_visible_media_entries(
                 &self.similar_groups,
@@ -451,6 +475,7 @@ impl DupeApp {
                 group.files.retain(|f| !deleted_paths.contains(&f.path));
             }
             self.groups.retain(|g| g.files.len() > 1);
+            self.groups_generation += 1;
             for group in &mut self.similar_groups {
                 group.files.retain(|f| !deleted_paths.contains(&f.path));
             }
@@ -494,6 +519,10 @@ impl eframe::App for DupeApp {
             if self.is_deleting() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
+        }
+
+        if self.active_mode == ScanMode::ExactContent {
+            self.refresh_exact_rows_cache();
         }
 
         let wants_keyboard = ctx.egui_wants_keyboard_input();

@@ -182,7 +182,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                             ui.ctx().layer_painter(ui.layer_id()).hline(
                                 table_x_range,
                                 y,
-                                Stroke::new(1.5, Color32::from_gray(90)),
+                                Stroke::new(1.0, Color32::from_gray(90)),
                             );
                         });
                     });
