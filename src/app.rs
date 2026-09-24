@@ -62,7 +62,9 @@ pub enum ViewMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortColumn {
     Filename,
+    Path,
     Size,
+    Created,
     Modified,
 }
 
@@ -107,6 +109,7 @@ pub struct DeleteConfirmState {
 pub struct DupeApp {
     pub config: ScanConfig,
     pub only_show_duplicates: bool,
+    pub only_show_name_copies: bool,
     pub view_mode: ViewMode,
     pub groups: Vec<DupeGroup>,
     pub selection: HashSet<PathBuf>,
@@ -134,6 +137,7 @@ impl Default for DupeApp {
         Self {
             config: ScanConfig::default(),
             only_show_duplicates: false,
+            only_show_name_copies: false,
             view_mode: ViewMode::Table,
             groups: Vec::new(),
             selection: HashSet::new(),
@@ -239,7 +243,8 @@ impl DupeApp {
     }
 
     pub fn select_ctrl_a(&mut self) {
-        let visible = compute_visible_entries(&self.groups, self.only_show_duplicates);
+        let filtered = crate::selection::filter_by_name_pattern(&self.groups, self.only_show_name_copies);
+        let visible = compute_visible_entries(filtered, self.only_show_duplicates);
         self.selection = visible.into_iter().map(|f| f.path.clone()).collect();
     }
 
@@ -370,6 +375,7 @@ impl eframe::App for DupeApp {
 
         crate::ui::settings_panel::show(self, ui);
         crate::ui::status_bar::show(self, ui);
+        crate::ui::view_toolbar::show(self, ui);
         crate::ui::delete_confirm::show(self, &ctx);
 
         egui::CentralPanel::default().show(ui, |ui| match self.view_mode {

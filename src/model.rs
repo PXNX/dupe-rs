@@ -5,6 +5,7 @@ use std::time::SystemTime;
 pub struct FileEntry {
     pub path: PathBuf,
     pub size: u64,
+    pub created: SystemTime,
     pub modified: SystemTime,
 }
 

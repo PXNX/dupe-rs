@@ -1,12 +1,37 @@
 use crate::model::FileEntry;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-pub fn group_by_size(files: Vec<FileEntry>) -> HashMap<u64, Vec<FileEntry>> {
-    let mut map: HashMap<u64, Vec<FileEntry>> = HashMap::new();
+/// Buckets files by size *and* lowercase extension as a cheap pre-filter before
+/// any hashing happens. Two files of the same size but different extensions
+/// are treated as certainly-not-duplicates and never even partial-hashed
+/// against each other, which meaningfully shrinks the hash-pass workload on
+/// trees with lots of same-sized-but-different-type files (thumbnails, log
+/// rotations, etc.) — at the cost of no longer detecting a duplicate that was
+/// renamed to a different extension.
+pub fn group_by_size(files: Vec<FileEntry>) -> HashMap<(u64, Option<String>), Vec<FileEntry>> {
+    let mut map: HashMap<(u64, Option<String>), Vec<FileEntry>> = HashMap::new();
     for f in files {
-        map.entry(f.size).or_default().push(f);
+        let ext = f
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+        map.entry((f.size, ext)).or_default().push(f);
     }
     map
+}
+
+/// Splits an already-confirmed duplicate group by parent directory, for the
+/// "only mark files in the same folder" mode. Singleton subgroups (the file's
+/// only copy left after splitting) are dropped since they're no longer dupes.
+pub fn split_by_parent(files: Vec<FileEntry>) -> Vec<Vec<FileEntry>> {
+    let mut map: HashMap<Option<PathBuf>, Vec<FileEntry>> = HashMap::new();
+    for f in files {
+        let parent = f.path.parent().map(|p| p.to_path_buf());
+        map.entry(parent).or_default().push(f);
+    }
+    map.into_values().filter(|v| v.len() > 1).collect()
 }
 
 /// Sorts a duplicate group in place so the "original" ends up at index 0:
@@ -28,10 +53,12 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     fn entry(name: &str, modified_offset_secs: u64) -> FileEntry {
+        let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(modified_offset_secs);
         FileEntry {
             path: PathBuf::from(name),
             size: 100,
-            modified: SystemTime::UNIX_EPOCH + Duration::from_secs(modified_offset_secs),
+            created: modified,
+            modified,
         }
     }
 
@@ -41,8 +68,22 @@ mod tests {
         small.size = 50;
         let files = vec![small, entry("b", 0), entry("c", 1)];
         let groups = group_by_size(files);
-        assert_eq!(groups.get(&50).unwrap().len(), 1);
-        assert_eq!(groups.get(&100).unwrap().len(), 2);
+        assert_eq!(groups.get(&(50, None)).unwrap().len(), 1);
+        assert_eq!(groups.get(&(100, None)).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn group_by_size_separates_same_size_different_extensions() {
+        let mut jpg = entry("photo.jpg", 0);
+        jpg.size = 100;
+        let mut png = entry("photo.png", 0);
+        png.size = 100;
+        let groups = group_by_size(vec![jpg, png]);
+        assert_eq!(
+            groups.len(),
+            2,
+            "same-size files with different extensions must not share a bucket"
+        );
     }
 
     #[test]
@@ -57,5 +98,19 @@ mod tests {
         let mut files = vec![entry("longer_name.txt", 5), entry("short.txt", 5)];
         sort_group_original(&mut files);
         assert_eq!(files[0].path, PathBuf::from("short.txt"));
+    }
+
+    #[test]
+    fn split_by_parent_keeps_only_folders_with_multiple_copies() {
+        let files = vec![
+            entry("dir_a/one.txt", 0),
+            entry("dir_a/two.txt", 0),
+            entry("dir_b/lonely.txt", 0),
+        ];
+        let mut subgroups = split_by_parent(files);
+        assert_eq!(subgroups.len(), 1);
+        let group = subgroups.remove(0);
+        assert_eq!(group.len(), 2);
+        assert!(group.iter().all(|f| f.path.starts_with("dir_a")));
     }
 }

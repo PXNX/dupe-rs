@@ -57,6 +57,7 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBoo
     let hash_bytes_done = AtomicU64::new(0);
     let last_reported = AtomicU64::new(0);
     let report_threshold = (total_hash_bytes / 200).max(4 * 1024 * 1024);
+    let same_folder_only = config.same_folder_only;
 
     by_partial.into_par_iter().for_each(|files| {
         if cancel.load(Ordering::Relaxed) {
@@ -79,12 +80,20 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBoo
                 let _ = tx.send(ScanEvent::HashProgress { bytes_done: done });
             }
         }
-        for (hash, mut group_files) in by_full {
-            if group_files.len() > 1 {
-                group::sort_group_original(&mut group_files);
+        for (hash, group_files) in by_full {
+            if group_files.len() <= 1 {
+                continue;
+            }
+            let subgroups = if same_folder_only {
+                group::split_by_parent(group_files)
+            } else {
+                vec![group_files]
+            };
+            for mut subgroup in subgroups {
+                group::sort_group_original(&mut subgroup);
                 let _ = tx.send(ScanEvent::GroupFound(DupeGroup {
                     hash,
-                    files: group_files,
+                    files: subgroup,
                 }));
             }
         }
@@ -127,6 +136,7 @@ mod tests {
         let config = ScanConfig {
             folders: vec![dir.path().to_path_buf()],
             exclude_subfolders: false,
+            same_folder_only: false,
             min_size: None,
             max_size: None,
             extensions: ExtensionFilter::All,

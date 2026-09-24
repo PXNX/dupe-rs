@@ -22,6 +22,7 @@ impl ExtensionFilter {
 pub struct ScanConfig {
     pub folders: Vec<PathBuf>,
     pub exclude_subfolders: bool, // true => max_depth(1) per root
+    pub same_folder_only: bool,   // true => only mark files duplicate if they share a parent dir
     pub min_size: Option<u64>,    // bytes
     pub max_size: Option<u64>,    // bytes
     pub extensions: ExtensionFilter,
@@ -32,6 +33,7 @@ impl Default for ScanConfig {
         Self {
             folders: Vec::new(),
             exclude_subfolders: false,
+            same_folder_only: false,
             min_size: None,
             max_size: None,
             extensions: ExtensionFilter::All,

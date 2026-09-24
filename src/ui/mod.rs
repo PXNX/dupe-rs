@@ -1,6 +1,9 @@
 pub mod delete_confirm;
+pub mod format;
 pub mod results_grid;
 pub mod results_table;
 pub mod settings_panel;
+pub mod stats_panel;
 pub mod status_bar;
 pub mod thumbnails;
+pub mod view_toolbar;
