@@ -69,7 +69,7 @@ fn show_index_section(app: &mut DupeApp, ui: &mut Ui) {
                     .button(RichText::from(format!("{} Cancel", icons::ICON_STOP.codepoint)))
                     .clicked()
                 {
-                    app.reverse_search.cancel_indexing();
+                    app.pending_confirm = Some(crate::app::ConfirmAction::CancelIndexing);
                 }
                 let paused = app.reverse_search.is_index_paused();
                 if crate::ui::controls::pause_resume_button(ui, paused).clicked() {

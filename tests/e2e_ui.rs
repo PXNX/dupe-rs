@@ -447,3 +447,87 @@ fn reencode_tab_replaces_a_bmp_with_a_smaller_lossless_webp() {
     assert_eq!(harness.state().reencode.totals.converted, 1);
     assert!(harness.query_by_label_contains("Saved").is_some());
 }
+
+/// Simulates clicking the window's close button for one frame.
+fn request_close(harness: &mut Harness<'static, DupeApp>) {
+    let viewport = harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+    viewport.events.push(egui::ViewportEvent::Close);
+    harness.step();
+    let viewport = harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+    viewport.events.clear();
+    harness.run();
+}
+
+#[test]
+fn cancelling_a_delete_asks_first_and_keep_going_leaves_it_running() {
+    let dir = tempdir().unwrap();
+    let paths: Vec<_> = (0..50)
+        .map(|i| {
+            let p = dir.path().join(format!("f{i}.txt"));
+            fs::write(&p, b"x").unwrap();
+            p
+        })
+        .collect();
+
+    let mut harness = harness();
+    harness.run();
+    {
+        let app = harness.state_mut();
+        app.selection.extend(paths.iter().cloned());
+        app.delete_selected();
+        app.delete_confirm.as_mut().unwrap().permanent = true;
+        app.confirm_delete();
+        app.delete_jobs[0].set_paused(true);
+    }
+    harness.step();
+    harness.step();
+
+    harness.get_by_label_contains("Cancel").click();
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label_contains("Stop deleting?").is_some());
+    harness.get_by_label("Keep going").click();
+    harness.step();
+    harness.step();
+    assert!(harness.state().pending_confirm.is_none());
+    assert!(!harness.state().delete_jobs[0].is_cancelled());
+
+    harness.get_by_label_contains("Cancel").click();
+    harness.step();
+    harness.step();
+    harness.get_by_label("Stop deleting").click();
+    harness.step();
+    harness.step();
+    assert!(harness.state().delete_jobs.is_empty() || harness.state().delete_jobs[0].is_cancelled());
+    wait_for_delete_done(&mut harness);
+    // Paused before touching most files, then cancelled: most survive.
+    assert!(paths.iter().filter(|p| p.exists()).count() >= 45);
+}
+
+#[test]
+fn closing_with_results_showing_asks_for_confirmation() {
+    let mut harness = harness();
+    harness.run();
+    // Nothing to lose: closes without asking.
+    request_close(&mut harness);
+    assert!(harness.state().pending_confirm.is_none());
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("a.txt"), b"duplicate payload").unwrap();
+    fs::write(dir.path().join("b.txt"), b"duplicate payload").unwrap();
+    harness.state_mut().config.folders.push(dir.path().to_path_buf());
+    harness.run();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+
+    request_close(&mut harness);
+    assert_eq!(
+        harness.state().pending_confirm,
+        Some(dupe_rs::app::ConfirmAction::CloseWindow)
+    );
+    assert!(harness.query_by_label_contains("scan results will be lost").is_some());
+    harness.get_by_label("Keep going").click();
+    harness.run();
+    assert!(harness.state().pending_confirm.is_none());
+}

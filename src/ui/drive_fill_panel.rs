@@ -26,9 +26,12 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     ui.add_space(4.0);
 
     if let Some(job) = &mut state.copy {
-        show_copy_progress(job, ui);
+        if show_copy_progress(job, ui) {
+            app.pending_confirm = Some(crate::app::ConfirmAction::CancelCopy);
+        }
         ui.add_space(4.0);
     }
+    let state = &mut app.drive_fill;
     if let Some(msg) = &state.status {
         ui.label(msg);
         ui.add_space(4.0);
@@ -156,7 +159,9 @@ fn show_plan_summary(state: &mut DriveFillState, ui: &mut Ui) {
     });
 }
 
-fn show_copy_progress(job: &mut CopyJob, ui: &mut Ui) {
+/// Returns whether Cancel was clicked.
+fn show_copy_progress(job: &mut CopyJob, ui: &mut Ui) -> bool {
+    let mut cancel = false;
     ui.group(|ui| {
         ui.set_min_width(ui.available_width());
         ui.add(egui::ProgressBar::new(job.fraction()).text(format!(
@@ -206,11 +211,12 @@ fn show_copy_progress(job: &mut CopyJob, ui: &mut Ui) {
                     )))
                     .clicked()
                 {
-                    job.cancel();
+                    cancel = true;
                 }
             }
         });
     });
+    cancel
 }
 
 /// Overview of every top-level source folder: name, size, file count,

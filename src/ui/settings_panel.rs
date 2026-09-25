@@ -174,7 +174,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     )))
                     .clicked()
                 {
-                    app.cancel_scan();
+                    app.pending_confirm = Some(crate::app::ConfirmAction::CancelScan);
                 }
                 if crate::ui::controls::pause_resume_button(ui, app.is_scan_paused()).clicked() {
                     app.toggle_scan_pause();

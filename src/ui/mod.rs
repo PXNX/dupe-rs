@@ -1,3 +1,4 @@
+pub mod confirm_dialog;
 pub mod controls;
 pub mod delete_confirm;
 pub mod drive_fill_panel;

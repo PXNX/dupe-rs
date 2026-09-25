@@ -1,12 +1,14 @@
-use crate::app::{DeleteJob, DupeApp};
+use crate::app::{ConfirmAction, DeleteJob, DupeApp};
 use crate::ui::format::format_eta;
 use egui::{Context, RichText, Window};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 
 pub fn show(app: &mut DupeApp, ctx: &Context) {
-    if app.is_deleting() {
-        show_jobs(ctx, &mut app.delete_jobs);
+    if app.is_deleting()
+        && let Some(id) = show_jobs(ctx, &mut app.delete_jobs)
+    {
+        app.pending_confirm = Some(ConfirmAction::CancelDelete(id));
     }
 
     let Some(confirm) = &mut app.delete_confirm else {
@@ -63,8 +65,10 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
 }
 
 /// Non-modal, bottom-right list of every running delete, so the results stay
-/// usable (and further deletes can be started) while they work.
-fn show_jobs(ctx: &Context, jobs: &mut [DeleteJob]) {
+/// usable (and further deletes can be started) while they work. Returns the
+/// id of a job whose Cancel button was clicked.
+fn show_jobs(ctx: &Context, jobs: &mut [DeleteJob]) -> Option<u64> {
+    let mut cancel = None;
     let title = if jobs.len() == 1 {
         format!("{} Deleting...", icons::ICON_DELETE.codepoint)
     } else {
@@ -84,12 +88,17 @@ fn show_jobs(ctx: &Context, jobs: &mut [DeleteJob]) {
                 if i > 0 {
                     ui.separator();
                 }
-                ui.push_id(job.id, |ui| show_job(ui, job));
+                if ui.push_id(job.id, |ui| show_job(ui, job)).inner {
+                    cancel = Some(job.id);
+                }
             }
         });
+    cancel
 }
 
-fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) {
+/// Returns whether Cancel was clicked.
+fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) -> bool {
+    let mut cancel = false;
     let (done, total) = (job.done, job.total);
     let fraction = if total == 0 { 1.0 } else { done as f32 / total as f32 };
     ui.add(egui::ProgressBar::new(fraction).text(format!("{done} / {total} files")));
@@ -126,7 +135,7 @@ fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) {
                 )
                 .clicked()
             {
-                job.cancel();
+                cancel = true;
             }
             if !job.is_cancelled()
                 && crate::ui::controls::pause_resume_button(ui, job.is_paused()).clicked()
@@ -136,4 +145,5 @@ fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) {
             }
         });
     });
+    cancel
 }

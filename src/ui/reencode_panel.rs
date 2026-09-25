@@ -23,7 +23,10 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     let state = &mut app.reencode;
     show_options(state, ui);
     ui.add_space(8.0);
-    show_controls(state, ui);
+    if show_controls(state, ui) {
+        app.pending_confirm = Some(crate::app::ConfirmAction::CancelReencode);
+    }
+    let state = &mut app.reencode;
     if let Some(job) = &mut state.job {
         ui.add_space(4.0);
         show_progress(job, ui);
@@ -132,7 +135,9 @@ fn show_options(state: &mut ReencodeState, ui: &mut Ui) {
     });
 }
 
-fn show_controls(state: &mut ReencodeState, ui: &mut Ui) {
+/// Returns whether Cancel was clicked.
+fn show_controls(state: &mut ReencodeState, ui: &mut Ui) -> bool {
+    let mut cancel = false;
     ui.horizontal(|ui| {
         let can_start = !state.is_running()
             && !state.folders.is_empty()
@@ -160,7 +165,7 @@ fn show_controls(state: &mut ReencodeState, ui: &mut Ui) {
                 )))
                 .clicked()
             {
-                job.cancel();
+                cancel = true;
             }
             if crate::ui::controls::pause_resume_button(ui, job.is_paused())
                 .on_hover_text("A video already being encoded finishes first")
@@ -170,6 +175,7 @@ fn show_controls(state: &mut ReencodeState, ui: &mut Ui) {
             }
         }
     });
+    cancel
 }
 
 fn show_progress(job: &ReencodeJob, ui: &mut Ui) {

@@ -167,6 +167,18 @@ impl SelectCriterion {
     }
 }
 
+/// Something the user must confirm first, shown by `ui::confirm_dialog`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmAction {
+    CancelScan,
+    CancelIndexing,
+    /// Cancel the delete job with this id.
+    CancelDelete(u64),
+    CancelCopy,
+    CancelReencode,
+    CloseWindow,
+}
+
 pub struct DeleteConfirmState {
     pub paths: Vec<PathBuf>,
     pub total_size: u64,
@@ -275,6 +287,10 @@ pub struct DupeApp {
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
     pub play_sounds: bool,
+
+    pub pending_confirm: Option<ConfirmAction>,
+    /// Set once closing has been confirmed, so the close goes through.
+    allow_close: bool,
 }
 
 impl Default for DupeApp {
@@ -312,6 +328,8 @@ impl Default for DupeApp {
 
             taskbar: Taskbar::default(),
             play_sounds: true,
+            pending_confirm: None,
+            allow_close: false,
         }
     }
 }
@@ -669,6 +687,76 @@ impl DupeApp {
         });
     }
 
+    /// Human-readable names of the background jobs still running.
+    pub fn running_work(&self) -> Vec<&'static str> {
+        let mut running = Vec::new();
+        if self.is_scanning() {
+            running.push("a scan");
+        }
+        if self.is_deleting() {
+            running.push("deleting");
+        }
+        if self.reverse_search.is_indexing() {
+            running.push("reverse-search indexing");
+        }
+        if self.drive_fill.is_copying() {
+            running.push("a drive-fill copy");
+        } else if self.drive_fill.is_measuring() {
+            running.push("measuring drive-fill folders");
+        }
+        if self.reencode.is_running() {
+            running.push("re-encoding");
+        }
+        running
+    }
+
+    /// Closing needs a confirmation while work is running or duplicate
+    /// results that would be lost are showing.
+    fn close_needs_confirm(&self) -> bool {
+        !self.running_work().is_empty() || !self.groups.is_empty() || !self.similar_groups.is_empty()
+    }
+
+    /// Carries out an action the user just confirmed in the dialog.
+    pub fn apply_confirmed(&mut self, action: ConfirmAction, ctx: &egui::Context) {
+        match action {
+            ConfirmAction::CancelScan => self.cancel_scan(),
+            ConfirmAction::CancelIndexing => self.reverse_search.cancel_indexing(),
+            ConfirmAction::CancelDelete(id) => {
+                if let Some(job) = self.delete_jobs.iter_mut().find(|j| j.id == id) {
+                    job.cancel();
+                }
+            }
+            ConfirmAction::CancelCopy => {
+                if let Some(job) = &mut self.drive_fill.copy {
+                    job.cancel();
+                }
+            }
+            ConfirmAction::CancelReencode => {
+                if let Some(job) = &mut self.reencode.job {
+                    job.cancel();
+                }
+            }
+            ConfirmAction::CloseWindow => {
+                // Ask every worker to stop so it can clean up (e.g. remove a
+                // half-written file) in the moment before the process exits.
+                self.cancel_scan();
+                self.reverse_search.cancel_indexing();
+                self.drive_fill.cancel_measure();
+                for job in &mut self.delete_jobs {
+                    job.cancel();
+                }
+                if let Some(job) = &mut self.drive_fill.copy {
+                    job.cancel();
+                }
+                if let Some(job) = &mut self.reencode.job {
+                    job.cancel();
+                }
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
     /// What the taskbar button should show for whatever background work is
     /// running. Deletes take precedence over a scan (they're what the user is
     /// most likely waiting on) and are combined into one bar across all
@@ -739,6 +827,14 @@ impl eframe::App for DupeApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.allow_close
+            && self.close_needs_confirm()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending_confirm = Some(ConfirmAction::CloseWindow);
+        }
+
         if self.is_scanning() {
             let changed = self.drain_scan_events();
             if changed {
@@ -796,6 +892,7 @@ impl eframe::App for DupeApp {
         self.taskbar.set(frame, self.taskbar_progress());
 
         crate::ui::tab_bar::show(self, ui);
+        crate::ui::confirm_dialog::show(self, &ctx);
 
         if self.tab == AppTab::Scan {
             let wants_keyboard = ctx.egui_wants_keyboard_input();
