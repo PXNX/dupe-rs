@@ -1,5 +1,6 @@
 pub mod controls;
 pub mod delete_confirm;
+pub mod drive_fill_panel;
 pub mod format;
 pub mod results_grid;
 pub mod results_table;

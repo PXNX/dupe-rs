@@ -144,6 +144,18 @@ impl ReverseSearchState {
         changed
     }
 
+    /// Adds files hashed elsewhere (e.g. by a drive-fill copy) to the index
+    /// and saves it.
+    pub fn add_to_index(&mut self, entries: Vec<(String, IndexedFile)>) -> std::io::Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.db.upsert(entries);
+        let saved = self.db.save(&self.db_path);
+        self.refresh_results();
+        saved
+    }
+
     /// Sets the file to find matches for and looks them up immediately.
     /// Hashing is done inline (blocking) rather than on a background thread:
     /// a single file's hash is fast enough for this not to be worth the extra

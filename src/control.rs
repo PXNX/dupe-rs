@@ -5,6 +5,19 @@ use std::time::{Duration, Instant};
 /// cancelled.
 const PAUSE_POLL: Duration = Duration::from_millis(50);
 
+/// Estimates time left from linear progress so far: `done` out of `total`
+/// units after `elapsed`. `None` until there's a rate to go on, or once done.
+pub fn estimate_remaining(done: u64, total: u64, elapsed: Duration) -> Option<Duration> {
+    if done == 0 || done >= total {
+        return None;
+    }
+    let rate = done as f64 / elapsed.as_secs_f64();
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+    Some(Duration::from_secs_f64((total - done) as f64 / rate))
+}
+
 /// Cancel and pause flags shared between the UI thread and a background
 /// worker (scan, index, or delete). Workers call `checkpoint` wherever they
 /// previously only polled for cancellation.
@@ -107,6 +120,19 @@ impl ActiveClock {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn estimates_remaining_time_from_the_rate_so_far() {
+        let eta = estimate_remaining(25, 100, Duration::from_secs(10)).unwrap();
+        assert_eq!(eta.as_secs(), 30);
+    }
+
+    #[test]
+    fn no_estimate_before_progress_or_once_complete() {
+        assert!(estimate_remaining(0, 100, Duration::from_secs(5)).is_none());
+        assert!(estimate_remaining(100, 100, Duration::from_secs(5)).is_none());
+        assert!(estimate_remaining(5, 100, Duration::ZERO).is_none());
+    }
 
     #[test]
     fn checkpoint_blocks_while_paused_until_resumed() {

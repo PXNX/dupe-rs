@@ -32,6 +32,10 @@ assets/screenshot.png.
 - Bulk selection by criterion (oldest, newest, shortest/longest path), size and
   extension filters, "same folder only" matching, and safe deletion straight to the
   Recycle Bin with progress reporting.
+- **Drive fill** — copy whole top-level folders of a source folder onto a target drive,
+  choosing the combination that fills its free space as completely as possible. Copied
+  files are hashed on the way and added to the reverse-search index, so you can later
+  look up which drive a file ended up on.
 
 ## Installing
 

@@ -1,5 +1,6 @@
 use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_extension_list};
-use crate::control::{ActiveClock, JobControl};
+use crate::control::{ActiveClock, JobControl, estimate_remaining};
+use crate::drive_fill::DriveFillState;
 use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
@@ -13,19 +14,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-
-/// Estimates time left from linear progress so far: `done` out of `total`
-/// units after `elapsed`. `None` until there's a rate to go on, or once done.
-pub fn estimate_remaining(done: u64, total: u64, elapsed: Duration) -> Option<Duration> {
-    if done == 0 || done >= total {
-        return None;
-    }
-    let rate = done as f64 / elapsed.as_secs_f64();
-    if !rate.is_finite() || rate <= 0.0 {
-        return None;
-    }
-    Some(Duration::from_secs_f64((total - done) as f64 / rate))
-}
 
 /// Byte-level progress of the full-file hashing pass, the slow, I/O-bound
 /// part of a scan on large trees. Used to show a GB-scanned readout and ETA.
@@ -132,6 +120,7 @@ pub enum ViewMode {
 pub enum AppTab {
     Scan,
     ReverseSearch,
+    DriveFill,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,6 +267,7 @@ pub struct DupeApp {
 
     pub tab: AppTab,
     pub reverse_search: ReverseSearchState,
+    pub drive_fill: DriveFillState,
 
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
@@ -314,6 +304,7 @@ impl Default for DupeApp {
 
             tab: AppTab::Scan,
             reverse_search: ReverseSearchState::default(),
+            drive_fill: DriveFillState::default(),
 
             taskbar: Taskbar::default(),
             play_sounds: true,
@@ -691,6 +682,13 @@ impl DupeApp {
                 TaskbarProgress::Normal(fraction)
             };
         }
+        if let Some(job) = &self.drive_fill.copy {
+            return if job.is_paused() {
+                TaskbarProgress::Paused(job.fraction())
+            } else {
+                TaskbarProgress::Normal(job.fraction())
+            };
+        }
         if let ScanState::Running {
             hash_progress,
             control,
@@ -764,6 +762,16 @@ impl eframe::App for DupeApp {
             }
         }
 
+        if self.drive_fill.is_busy() {
+            let changed = self.drive_fill.drain_events(&mut self.reverse_search);
+            if changed {
+                ctx.request_repaint();
+            }
+            if self.drive_fill.is_busy() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
         self.taskbar.set(frame, self.taskbar_progress());
 
         crate::ui::tab_bar::show(self, ui);
@@ -796,27 +804,10 @@ impl eframe::App for DupeApp {
                 },
             });
         } else {
-            egui::CentralPanel::default().show(ui, |ui| {
-                crate::ui::reverse_search_panel::show(self, ui);
+            egui::CentralPanel::default().show(ui, |ui| match self.tab {
+                AppTab::DriveFill => crate::ui::drive_fill_panel::show(self, ui),
+                _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn estimates_remaining_time_from_the_rate_so_far() {
-        let eta = estimate_remaining(25, 100, Duration::from_secs(10)).unwrap();
-        assert_eq!(eta.as_secs(), 30);
-    }
-
-    #[test]
-    fn no_estimate_before_progress_or_once_complete() {
-        assert!(estimate_remaining(0, 100, Duration::from_secs(5)).is_none());
-        assert!(estimate_remaining(100, 100, Duration::from_secs(5)).is_none());
-        assert!(estimate_remaining(5, 100, Duration::ZERO).is_none());
     }
 }

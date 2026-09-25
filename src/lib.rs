@@ -1,6 +1,7 @@
 pub mod app;
 pub mod config;
 pub mod control;
+pub mod drive_fill;
 pub mod index_db;
 pub mod model;
 pub mod namematch;

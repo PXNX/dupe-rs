@@ -82,6 +82,21 @@ impl IndexDb {
         }
     }
 
+    /// Adds `new_entries` without touching the rest of their volume (unlike
+    /// `reindex_volume`), replacing any older entry recorded at the same
+    /// volume + relative path, since that file's content may have changed.
+    pub fn upsert(&mut self, new_entries: Vec<(String, IndexedFile)>) {
+        let key = |f: &IndexedFile| (f.drive_letter.clone(), f.volume_label.clone(), f.rel_path.clone());
+        let replaced: HashSet<_> = new_entries.iter().map(|(_, f)| key(f)).collect();
+        for files in self.entries.values_mut() {
+            files.retain(|f| !replaced.contains(&key(f)));
+        }
+        self.entries.retain(|_, files| !files.is_empty());
+        for (hash_hex, file) in new_entries {
+            self.entries.entry(hash_hex).or_default().push(file);
+        }
+    }
+
     /// Every indexed file with the given content hash, excluding `exclude`
     /// itself (matched by volume identity + relative path, since a relative
     /// path alone can collide across different volumes/drive letters).
@@ -218,6 +233,28 @@ mod tests {
 
         let results = db.matches("hash1", &file_on("D:", "500GB-5", "a.jpg"));
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn upsert_adds_files_and_replaces_same_path_without_wiping_the_volume() {
+        let mut db = IndexDb::default();
+        db.reindex_volume("D:", "D:-label", vec![("old".to_string(), file("D:", "a.jpg"))]);
+        db.reindex_volume("D:", "D:-label", vec![
+            ("old".to_string(), file("D:", "a.jpg")),
+            ("keep".to_string(), file("D:", "keep.jpg")),
+        ]);
+
+        db.upsert(vec![
+            ("new".to_string(), file("D:", "a.jpg")),
+            ("added".to_string(), file("D:", "b.jpg")),
+        ]);
+
+        let probe = file("D:", "nonexistent");
+        assert!(db.matches("old", &probe).is_empty());
+        assert_eq!(db.matches("new", &probe).len(), 1);
+        assert_eq!(db.matches("added", &probe).len(), 1);
+        assert_eq!(db.matches("keep", &probe).len(), 1);
+        assert_eq!(db.total_files(), 3);
     }
 
     #[test]

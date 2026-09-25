@@ -76,6 +76,54 @@ pub fn volume_info(drive_letter: &str) -> VolumeInfo {
     }
 }
 
+/// Free/total space of the drive holding a directory, plus its cluster
+/// (allocation unit) size, which is what file sizes round up to on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskSpace {
+    /// Free bytes available to this user (honours disk quotas).
+    pub free: u64,
+    pub total: u64,
+    pub cluster: u64,
+}
+
+/// Looks up `DiskSpace` for the drive `dir` lives on, or `None` if it can't
+/// be queried (e.g. the directory doesn't exist).
+#[cfg(windows)]
+pub fn disk_space(dir: &Path) -> Option<DiskSpace> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDiskFreeSpaceW};
+
+    let wide = |s: &std::ffi::OsStr| s.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let dir_wide = wide(dir.as_os_str());
+    let (mut free, mut total, mut total_free) = (0u64, 0u64, 0u64);
+    // SAFETY: valid NUL-terminated path and out-pointers to locals.
+    if unsafe { GetDiskFreeSpaceExW(dir_wide.as_ptr(), &mut free, &mut total, &mut total_free) }
+        == 0
+    {
+        return None;
+    }
+
+    let drive = drive_letter_of(dir);
+    let mut cluster = 4096;
+    if !drive.is_empty() {
+        let root = wide(std::ffi::OsStr::new(&format!("{drive}\\")));
+        let (mut sectors, mut bytes, mut free_clusters, mut clusters) = (0u32, 0u32, 0u32, 0u32);
+        // SAFETY: as above.
+        let ok = unsafe {
+            GetDiskFreeSpaceW(root.as_ptr(), &mut sectors, &mut bytes, &mut free_clusters, &mut clusters)
+        };
+        if ok != 0 && sectors > 0 && bytes > 0 {
+            cluster = sectors as u64 * bytes as u64;
+        }
+    }
+    Some(DiskSpace { free, total, cluster })
+}
+
+#[cfg(not(windows))]
+pub fn disk_space(_dir: &Path) -> Option<DiskSpace> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

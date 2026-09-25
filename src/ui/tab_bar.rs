@@ -18,6 +18,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 AppTab::ReverseSearch,
                 format!("{} Reverse Search", icons::ICON_MANAGE_SEARCH.codepoint),
             );
+            ui.selectable_value(
+                &mut app.tab,
+                AppTab::DriveFill,
+                format!("{} Drive Fill", icons::ICON_HARD_DRIVE.codepoint),
+            );
         });
         ui.add_space(2.0);
     });

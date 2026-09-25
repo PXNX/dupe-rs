@@ -389,3 +389,20 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
     let matched = &harness.state().reverse_search.results[0];
     assert_eq!(matched.absolute_path(), indexed);
 }
+
+#[test]
+fn drive_fill_tab_shows_its_panel_and_reads_the_targets_free_space() {
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label_contains("Drive Fill").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::DriveFill);
+    assert!(harness.query_by_label_contains("Choose a source and a target").is_some());
+
+    let target = tempdir().unwrap();
+    harness.state_mut().drive_fill.set_target(target.path().to_path_buf());
+    harness.run();
+    let space = harness.state().drive_fill.space.expect("free space of a temp dir");
+    assert!(space.total > 0 && space.free <= space.total && space.cluster >= 512);
+    assert!(harness.query_by_label_contains("free of").is_some());
+}
