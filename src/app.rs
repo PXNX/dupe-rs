@@ -3,6 +3,7 @@ use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, Sim
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
+use crate::taskbar::{Taskbar, TaskbarProgress};
 use crate::ui::thumbnails::ThumbnailCache;
 use crate::view_cache::ExactRowsCache;
 use crossbeam_channel::Receiver;
@@ -227,6 +228,8 @@ pub struct DupeApp {
 
     pub tab: AppTab,
     pub reverse_search: ReverseSearchState,
+
+    pub taskbar: Taskbar,
 }
 
 impl Default for DupeApp {
@@ -258,6 +261,8 @@ impl Default for DupeApp {
 
             tab: AppTab::Scan,
             reverse_search: ReverseSearchState::default(),
+
+            taskbar: Taskbar::default(),
         }
     }
 }
@@ -536,10 +541,41 @@ impl DupeApp {
 
         changed
     }
+
+    /// What the taskbar button should show for whatever background work is
+    /// running. A delete takes precedence over a scan (it's the one the user
+    /// is most likely waiting on), and a scan over reverse-search indexing.
+    pub fn taskbar_progress(&self) -> TaskbarProgress {
+        if let DeleteState::Running { total, done, .. } = &self.delete_state {
+            return if *total == 0 {
+                TaskbarProgress::Indeterminate
+            } else {
+                TaskbarProgress::Normal(*done as f32 / *total as f32)
+            };
+        }
+        if let ScanState::Running { hash_progress, .. } = &self.scan_state {
+            return match hash_progress {
+                Some(p) if p.total_bytes > 0 => {
+                    TaskbarProgress::Normal(p.done_bytes as f32 / p.total_bytes as f32)
+                }
+                _ => TaskbarProgress::Indeterminate,
+            };
+        }
+        if let crate::reverse_search::IndexState::Running { scanned, total, .. } =
+            &self.reverse_search.index_state
+        {
+            return if *total == 0 {
+                TaskbarProgress::Indeterminate
+            } else {
+                TaskbarProgress::Normal(*scanned as f32 / *total as f32)
+            };
+        }
+        TaskbarProgress::None
+    }
 }
 
 impl eframe::App for DupeApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
         if self.is_scanning() {
@@ -575,6 +611,8 @@ impl eframe::App for DupeApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
         }
+
+        self.taskbar.set(frame, self.taskbar_progress());
 
         crate::ui::tab_bar::show(self, ui);
 

@@ -7,6 +7,7 @@ pub mod reverse_search;
 pub mod scanner;
 pub mod selection;
 pub mod stats;
+pub mod taskbar;
 pub mod ui;
 pub mod view_cache;
 pub mod volume;

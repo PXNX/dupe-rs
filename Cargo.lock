@@ -988,6 +988,7 @@ dependencies = [
  "humansize",
  "image",
  "open",
+ "raw-window-handle",
  "rayon",
  "rfd",
  "serde",
@@ -995,6 +996,7 @@ dependencies = [
  "tempfile",
  "trash",
  "walkdir",
+ "windows",
  "windows-sys 0.61.2",
  "winresource",
 ]
