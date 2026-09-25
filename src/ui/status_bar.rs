@@ -8,6 +8,8 @@ use humansize::{DECIMAL, format_size};
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     Panel::bottom("status_bar").show(ui, |ui| {
         ui.add_space(2.0);
+        let grouped = app.active_mode != ScanMode::MatchingFiles;
+        if grouped {
         ui.horizontal(|ui| {
             ui.label(icons::ICON_TASK_ALT.rich_text());
             ui.label("Select per group:");
@@ -28,6 +30,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
             }
         });
         ui.add_space(2.0);
+        }
 
         // `exact_rows_cache` is already filtered/sorted (refreshed once per
         // frame in `DupeApp::ui`, not here), so this only has to scan a
@@ -57,10 +60,20 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     .sum();
                 (shown_size, visible.len(), selected_count, selected_size)
             }
+            ScanMode::MatchingFiles => {
+                let files = &app.matched_files;
+                let shown_size: u64 = files.iter().map(|f| f.size).sum();
+                let selected: Vec<_> =
+                    files.iter().filter(|f| app.selection.contains(&f.path)).collect();
+                let selected_size: u64 = selected.iter().map(|f| f.size).sum();
+                (shown_size, files.len(), selected.len(), selected_size)
+            }
         };
 
         ui.horizontal(|ui| {
-            ui.checkbox(&mut app.only_show_duplicates, "Only show duplicates");
+            if grouped {
+                ui.checkbox(&mut app.only_show_duplicates, "Only show duplicates");
+            }
             if app.active_mode == ScanMode::ExactContent {
                 ui.checkbox(&mut app.only_show_name_copies, "Copy-named only")
                     .on_hover_text(
@@ -87,6 +100,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         for f in
                             compute_visible_media_entries(&app.similar_groups, app.only_show_duplicates)
                         {
+                            app.selection.insert(f.path.clone());
+                        }
+                    }
+                    ScanMode::MatchingFiles => {
+                        for f in &app.matched_files {
                             app.selection.insert(f.path.clone());
                         }
                     }

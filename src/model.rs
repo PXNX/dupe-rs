@@ -53,6 +53,8 @@ pub enum ScanEvent {
     },
     GroupFound(DupeGroup),
     SimilarGroupFound(SimilarGroup),
+    /// A batch of files found by `ScanMode::MatchingFiles`.
+    FilesMatched(Vec<FileEntry>),
     Done {
         elapsed_ms: u128,
     },

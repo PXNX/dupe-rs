@@ -65,6 +65,15 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                  found via perceptual hashing. The highest-resolution (then oldest) copy is kept \
                  as the original. Video comparison needs ffmpeg on PATH.",
             );
+            ui.radio_value(
+                &mut app.config.mode,
+                ScanMode::MatchingFiles,
+                "Files matching filters",
+            )
+            .on_hover_text(
+                "Every file that passes the size, extension, and name filters, duplicate or \
+                 not, to clear out e.g. all .tmp files or everything under 1 KB.",
+            );
             if app.config.mode == ScanMode::SimilarMedia {
                 ui.separator();
                 ui.label("Similarity:");
@@ -151,13 +160,31 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         );
                     }
                 });
-                ui.horizontal(|ui| {
-                    ui.label(icons::ICON_FOLDER_ZIP.rich_text());
-                    ui.checkbox(&mut app.config.skip_archives, "Skip RAR/split archives")
+                if app.config.mode == ScanMode::MatchingFiles {
+                    ui.horizontal(|ui| {
+                        ui.label(icons::ICON_TEXT_FIELDS.rich_text());
+                        ui.label("Name:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.config.name_filter)
+                                .hint_text("e.g. thumbs, *.tmp, IMG_????.jpg")
+                                .desired_width(220.0),
+                        )
                         .on_hover_text(
-                            "Leave .rar files and split-archive volumes (.part1.rar, .r00,                              .7z.001, .z01, ...) out of the scan. Deleting one part of a set as                              a duplicate breaks the whole set.",
+                            "Case-insensitive. Plain text matches anywhere in the name; with * \
+                             or ? it must match the whole name. Empty matches every name.",
                         );
-                });
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(icons::ICON_FOLDER_ZIP.rich_text());
+                        ui.checkbox(&mut app.config.skip_archives, "Skip RAR/split archives")
+                            .on_hover_text(
+                                "Leave .rar files and split-archive volumes (.part1.rar, .r00, \
+                                 .7z.001, .z01, ...) out of the scan. Deleting one part of a set \
+                                 as a duplicate breaks the whole set.",
+                            );
+                    });
+                }
             });
         });
 

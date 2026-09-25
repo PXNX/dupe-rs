@@ -8,6 +8,7 @@ pub mod format;
 pub mod reencode_panel;
 pub mod results_grid;
 pub mod results_table;
+pub mod results_table_matched;
 pub mod results_table_similar;
 pub mod reverse_search_panel;
 pub mod settings_panel;

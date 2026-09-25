@@ -598,3 +598,60 @@ fn flatten_tab_previews_then_moves_files_up_with_renames() {
     assert!(!dir.path().join("x").exists());
     assert!(harness.query_by_label_contains("Undo last run").is_some());
 }
+
+#[test]
+fn matching_files_mode_finds_files_by_filter_and_deletes_them() {
+    use dupe_rs::config::ScanMode;
+    let dir = tempdir().unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    let tmp_a = dir.path().join("a.tmp");
+    let tmp_empty = dir.path().join("sub/empty.TMP");
+    let keep = dir.path().join("keep.txt");
+    fs::write(&tmp_a, b"scratch").unwrap();
+    fs::write(&tmp_empty, b"").unwrap();
+    fs::write(&keep, b"important").unwrap();
+    fs::write(dir.path().join("set.part1.rar"), b"archive").unwrap();
+
+    let mut harness = harness();
+    {
+        let app = harness.state_mut();
+        app.config.folders.push(dir.path().to_path_buf());
+        app.config.mode = ScanMode::MatchingFiles;
+    }
+    harness.run();
+    assert!(harness.query_by_label_contains("Name:").is_some());
+    harness.state_mut().config.name_filter = "*.tmp".into();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+
+    let mut found: Vec<_> = harness.state().matched_files.iter().map(|f| f.path.clone()).collect();
+    found.sort();
+    assert_eq!(found, vec![tmp_a.clone(), tmp_empty.clone()], "empty files count too");
+
+    // Archives aren't skipped in this mode: removing them by filter is deliberate.
+    harness.state_mut().config.name_filter = "*.rar".into();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+    assert_eq!(harness.state().matched_files.len(), 1);
+
+    harness.state_mut().config.name_filter = "*.tmp".into();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+    harness.get_by_label_contains("Select All Shown").click();
+    harness.step();
+    harness.key_press(egui::Key::Delete);
+    harness.step();
+    harness.state_mut().delete_confirm.as_mut().unwrap().permanent = true;
+    harness.run();
+    harness.get_by_label("Delete").click();
+    harness.step();
+    wait_for_delete_done(&mut harness);
+    harness.run();
+
+    assert!(!tmp_a.exists() && !tmp_empty.exists());
+    assert!(keep.exists());
+    assert!(harness.state().matched_files.is_empty());
+}

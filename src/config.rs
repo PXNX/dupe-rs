@@ -26,6 +26,9 @@ pub enum ScanMode {
     /// Images/videos that look like the same shot at a different resolution
     /// (re-encodes, resizes, thumbnails), found via perceptual hashing.
     SimilarMedia,
+    /// Every file passing the size/extension/name filters, duplicate or not,
+    /// e.g. to clear out all `.tmp` files or everything under 1 KB.
+    MatchingFiles,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +47,10 @@ pub struct ScanConfig {
     /// `crate::archive`): deleting one part of a set as "a duplicate" breaks
     /// the whole set.
     pub skip_archives: bool,
+    /// Only used in `ScanMode::MatchingFiles`: a case-insensitive name
+    /// filter, either a plain substring or a `*`/`?` wildcard pattern
+    /// matched against the whole file name. Empty matches everything.
+    pub name_filter: String,
 }
 
 impl Default for ScanConfig {
@@ -58,8 +65,44 @@ impl Default for ScanConfig {
             mode: ScanMode::ExactContent,
             similarity_threshold: 10,
             skip_archives: true,
+            name_filter: String::new(),
         }
     }
+}
+
+/// Case-insensitive file-name match for `ScanConfig::name_filter`: with `*`
+/// (any run of characters) or `?` (any one character) the pattern must
+/// match the whole name, otherwise it only has to appear somewhere in it.
+pub fn name_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim().to_lowercase();
+    if pattern.is_empty() {
+        return true;
+    }
+    let name = name.to_lowercase();
+    if !pattern.contains(['*', '?']) {
+        return name.contains(&pattern);
+    }
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    // Classic greedy wildcard match with backtracking to the last `*`.
+    let (mut pi, mut ni) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
 }
 
 /// Parses a comma-separated extension list into normalized (lowercase, no leading dot) entries.
@@ -109,5 +152,22 @@ impl SizeUnit {
             return None;
         }
         Some((value * self.multiplier() as f64) as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_filter_is_a_substring_or_a_whole_name_wildcard() {
+        assert!(name_matches("", "anything.txt"));
+        assert!(name_matches("thumbs", "Thumbs.db"));
+        assert!(!name_matches("thumbs", "photo.jpg"));
+        assert!(name_matches("*.tmp", "report.TMP"));
+        assert!(!name_matches("*.tmp", "report.tmp.bak"));
+        assert!(name_matches("img_????.jpg", "IMG_0042.jpg"));
+        assert!(!name_matches("img_????.jpg", "IMG_42.jpg"));
+        assert!(name_matches("*copy*", "photo - copy (2).png"));
     }
 }

@@ -148,7 +148,10 @@ fn process_entry(
     };
 
     let size = metadata.len();
-    if size == 0 {
+    let matching = config.mode == crate::config::ScanMode::MatchingFiles;
+    // Empty files can't be meaningfully deduplicated by content, but they're
+    // a legitimate target when clearing out files by filter.
+    if size == 0 && !matching {
         return None;
     }
     if config.min_size.is_some_and(|min| size < min) {
@@ -158,7 +161,13 @@ fn process_entry(
         return None;
     }
 
+    let name = entry.file_name().to_string_lossy();
+    if matching && !crate::config::name_matches(&config.name_filter, &name) {
+        return None;
+    }
+    // Only duplicates are skipped: removing archives by filter is deliberate.
     if config.skip_archives
+        && !matching
         && entry
             .file_name()
             .to_str()

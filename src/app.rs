@@ -253,6 +253,13 @@ pub struct DupeApp {
     pub view_mode: ViewMode,
     pub groups: Vec<DupeGroup>,
     pub similar_groups: Vec<SimilarGroup>,
+    /// Results of a `ScanMode::MatchingFiles` scan.
+    pub matched_files: Vec<FileEntry>,
+    /// Bumped whenever `matched_files` changes; keys `matched_order`.
+    matched_generation: u64,
+    /// Display order of `matched_files` for the current sort, rebuilt only
+    /// when the files or the sort change.
+    matched_order: (u64, Option<(SortColumn, SortDirection)>, Vec<usize>),
     /// Bumped every time `groups` is mutated (new group found, groups pruned
     /// after a delete, scan restarted). `exact_rows_cache` is keyed on this
     /// so it only rebuilds when the underlying data actually changed, rather
@@ -309,6 +316,9 @@ impl Default for DupeApp {
             view_mode: ViewMode::Table,
             groups: Vec::new(),
             similar_groups: Vec::new(),
+            matched_files: Vec::new(),
+            matched_generation: 0,
+            matched_order: (u64::MAX, None, Vec::new()),
             groups_generation: 0,
             exact_rows_cache: ExactRowsCache::default(),
             active_mode: ScanMode::ExactContent,
@@ -363,6 +373,8 @@ impl DupeApp {
 
         self.groups.clear();
         self.similar_groups.clear();
+        self.matched_files.clear();
+        self.matched_generation += 1;
         self.groups_generation += 1;
         self.active_mode = self.config.mode;
         self.selection.clear();
@@ -453,6 +465,10 @@ impl DupeApp {
                         groups_changed = true;
                     }
                     ScanEvent::SimilarGroupFound(group) => self.similar_groups.push(group),
+                    ScanEvent::FilesMatched(files) => {
+                        self.matched_files.extend(files);
+                        self.matched_generation += 1;
+                    }
                     ScanEvent::Done { elapsed_ms } => {
                         cancelled = control.is_cancelled();
                         let paused_ms = clock.paused_total().as_millis();
@@ -500,7 +516,34 @@ impl DupeApp {
             .into_iter()
             .map(|f| f.path.clone())
             .collect(),
+            ScanMode::MatchingFiles => self.matched_files.iter().map(|f| f.path.clone()).collect(),
         };
+    }
+
+    /// Indices into `matched_files` in the table's sort order (cached).
+    pub fn matched_order(&mut self) -> &[usize] {
+        if self.matched_order.0 != self.matched_generation || self.matched_order.1 != self.sort {
+            let files = &self.matched_files;
+            let mut order: Vec<usize> = (0..files.len()).collect();
+            if let Some((column, direction)) = self.sort {
+                order.sort_by(|&a, &b| {
+                    let (fa, fb) = (&files[a], &files[b]);
+                    let ord = match column {
+                        SortColumn::Filename => fa.path.file_name().cmp(&fb.path.file_name()),
+                        SortColumn::Path => fa.path.cmp(&fb.path),
+                        SortColumn::Size => fa.size.cmp(&fb.size),
+                        SortColumn::Created => fa.created.cmp(&fb.created),
+                        SortColumn::Modified => fa.modified.cmp(&fb.modified),
+                    };
+                    match direction {
+                        SortDirection::Asc => ord,
+                        SortDirection::Desc => ord.reverse(),
+                    }
+                });
+            }
+            self.matched_order = (self.matched_generation, self.sort, order);
+        }
+        &self.matched_order.2
     }
 
     /// For each group, finds the file matching `criterion` and adds it to the
@@ -519,6 +562,8 @@ impl DupeApp {
                     apply_criterion_selection(&group.files, criterion, invert, &mut self.selection);
                 }
             }
+            // No groups to pick within.
+            ScanMode::MatchingFiles => {}
         }
     }
 
@@ -549,6 +594,12 @@ impl DupeApp {
                 .sum(),
             ScanMode::SimilarMedia => compute_visible_media_entries(&self.similar_groups, false)
                 .into_iter()
+                .filter(|f| wanted.contains(&f.path))
+                .map(|f| f.size)
+                .sum(),
+            ScanMode::MatchingFiles => self
+                .matched_files
+                .iter()
                 .filter(|f| wanted.contains(&f.path))
                 .map(|f| f.size)
                 .sum(),
@@ -672,6 +723,8 @@ impl DupeApp {
             group.files.retain(|f| !deleted_paths.contains(&f.path));
         }
         self.similar_groups.retain(|g| g.files.len() > 1);
+        self.matched_files.retain(|f| !deleted_paths.contains(&f.path));
+        self.matched_generation += 1;
         self.selection.retain(|p| !deleted_paths.contains(p));
 
         if self.play_sounds {
@@ -769,7 +822,10 @@ impl DupeApp {
     /// Closing needs a confirmation while work is running or duplicate
     /// results that would be lost are showing.
     fn close_needs_confirm(&self) -> bool {
-        !self.running_work().is_empty() || !self.groups.is_empty() || !self.similar_groups.is_empty()
+        !self.running_work().is_empty()
+            || !self.groups.is_empty()
+            || !self.similar_groups.is_empty()
+            || !self.matched_files.is_empty()
     }
 
     /// Carries out an action the user just confirmed in the dialog.
@@ -1016,6 +1072,7 @@ impl eframe::App for DupeApp {
 
             egui::CentralPanel::default().show(ui, |ui| match self.active_mode {
                 ScanMode::SimilarMedia => crate::ui::results_table_similar::show(self, ui),
+                ScanMode::MatchingFiles => crate::ui::results_table_matched::show(self, ui),
                 ScanMode::ExactContent => match self.view_mode {
                     ViewMode::Table => crate::ui::results_table::show(self, ui),
                     ViewMode::Grid => crate::ui::results_grid::show(self, ui),

@@ -22,7 +22,20 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobContr
     match config.mode {
         ScanMode::ExactContent => run_exact_scan(config, tx, control),
         ScanMode::SimilarMedia => similarity::run_similarity_scan(config, tx, control),
+        ScanMode::MatchingFiles => run_match_scan(config, tx, control),
     }
+}
+
+/// Lists every file passing the configured filters (no hashing at all).
+fn run_match_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobControl>) {
+    let start = Instant::now();
+    let files = walk::walk_and_filter(&config, &control, &tx);
+    for batch in files.chunks(1000) {
+        let _ = tx.send(ScanEvent::FilesMatched(batch.to_vec()));
+    }
+    let _ = tx.send(ScanEvent::Done {
+        elapsed_ms: start.elapsed().as_millis(),
+    });
 }
 
 /// Orchestrates a full exact-content scan: walk & filter, group by size,
