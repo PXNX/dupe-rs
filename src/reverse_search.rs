@@ -1,17 +1,17 @@
 use crate::config::ScanConfig;
+use crate::control::JobControl;
 use crate::index_db::{IndexDb, IndexedFile, hex_encode};
 use crate::scanner::indexer::{self, IndexEvent};
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub enum IndexState {
     Idle,
     Running {
         rx: Receiver<IndexEvent>,
-        cancel: Arc<AtomicBool>,
+        control: Arc<JobControl>,
         scanned: usize,
         total: usize,
     },
@@ -67,23 +67,33 @@ impl ReverseSearchState {
             ..ScanConfig::default()
         };
         let (tx, rx) = crossbeam_channel::unbounded();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_for_thread = cancel.clone();
+        let control = Arc::new(JobControl::default());
+        let control_for_thread = control.clone();
         std::thread::spawn(move || {
-            indexer::run_index_scan(config, tx, cancel_for_thread);
+            indexer::run_index_scan(config, tx, control_for_thread);
         });
         self.status = None;
         self.index_state = IndexState::Running {
             rx,
-            cancel,
+            control,
             scanned: 0,
             total: 0,
         };
     }
 
     pub fn cancel_indexing(&mut self) {
-        if let IndexState::Running { cancel, .. } = &self.index_state {
-            cancel.store(true, Ordering::Relaxed);
+        if let IndexState::Running { control, .. } = &self.index_state {
+            control.cancel();
+        }
+    }
+
+    pub fn is_index_paused(&self) -> bool {
+        matches!(&self.index_state, IndexState::Running { control, .. } if control.is_paused())
+    }
+
+    pub fn toggle_index_pause(&mut self) {
+        if let IndexState::Running { control, .. } = &self.index_state {
+            control.set_paused(!control.is_paused());
         }
     }
 

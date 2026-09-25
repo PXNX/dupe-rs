@@ -9,6 +9,8 @@ pub enum TaskbarProgress {
     Indeterminate,
     /// Completed fraction, `0.0..=1.0`.
     Normal(f32),
+    /// Like `Normal`, but shown in the paused (yellow) style.
+    Paused(f32),
 }
 
 impl TaskbarProgress {
@@ -16,9 +18,8 @@ impl TaskbarProgress {
     /// visible bar would actually move, not on every repaint.
     fn quantized(self) -> Self {
         match self {
-            TaskbarProgress::Normal(f) => {
-                TaskbarProgress::Normal((f.clamp(0.0, 1.0) * 1000.0).round() / 1000.0)
-            }
+            TaskbarProgress::Normal(f) => TaskbarProgress::Normal(quantize(f)),
+            TaskbarProgress::Paused(f) => TaskbarProgress::Paused(quantize(f)),
             other => other,
         }
     }
@@ -60,6 +61,10 @@ impl Taskbar {
     }
 }
 
+fn quantize(fraction: f32) -> f32 {
+    (fraction.clamp(0.0, 1.0) * 1000.0).round() / 1000.0
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 fn native_hwnd(frame: &eframe::Frame) -> Option<isize> {
     match frame.window_handle().ok()?.as_raw() {
@@ -76,7 +81,8 @@ mod win {
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{
-        ITaskbarList3, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TaskbarList,
+        ITaskbarList3, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED, TBPFLAG,
+        TaskbarList,
     };
 
     /// Resolution of the progress value handed to `SetProgressValue`.
@@ -113,15 +119,17 @@ mod win {
                     TaskbarProgress::Indeterminate => {
                         self.list.SetProgressState(self.hwnd, TBPF_INDETERMINATE)
                     }
-                    TaskbarProgress::Normal(fraction) => {
-                        let _ = self.list.SetProgressState(self.hwnd, TBPF_NORMAL);
-                        self.list.SetProgressValue(
-                            self.hwnd,
-                            (fraction as f64 * SCALE as f64) as u64,
-                            SCALE,
-                        )
-                    }
+                    TaskbarProgress::Normal(fraction) => self.set_value(TBPF_NORMAL, fraction),
+                    TaskbarProgress::Paused(fraction) => self.set_value(TBPF_PAUSED, fraction),
                 };
+            }
+        }
+
+        /// SAFETY: see `set`.
+        unsafe fn set_value(&self, state: TBPFLAG, fraction: f32) -> windows::core::Result<()> {
+            unsafe {
+                let _ = self.list.SetProgressState(self.hwnd, state);
+                self.list.SetProgressValue(self.hwnd, (fraction as f64 * SCALE as f64) as u64, SCALE)
             }
         }
     }

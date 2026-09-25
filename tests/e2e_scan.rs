@@ -6,13 +6,13 @@
 
 use crossbeam_channel::unbounded;
 use dupe_rs::config::{ExtensionFilter, ScanConfig};
+use dupe_rs::control::JobControl;
 use dupe_rs::model::{DupeGroup, ScanEvent};
 use dupe_rs::scanner::run_scan;
 use filetime::{FileTime, set_file_mtime};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
@@ -30,7 +30,7 @@ fn age(path: &Path, secs_ago: u64) {
 
 fn scan(config: ScanConfig) -> Vec<DupeGroup> {
     let (tx, rx) = unbounded();
-    run_scan(config, tx, Arc::new(AtomicBool::new(false)));
+    run_scan(config, tx, Arc::new(JobControl::default()));
     rx.try_iter()
         .filter_map(|e| match e {
             ScanEvent::GroupFound(g) => Some(g),
@@ -181,8 +181,7 @@ fn cancelling_before_scan_starts_yields_no_groups() {
     fs::write(dir.path().join("b.txt"), b"content").unwrap();
 
     let (tx, rx) = unbounded();
-    let cancel = Arc::new(AtomicBool::new(true));
-    run_scan(config_for(dir.path()), tx, cancel);
+    run_scan(config_for(dir.path()), tx, Arc::new(JobControl::cancelled()));
 
     let events: Vec<ScanEvent> = rx.try_iter().collect();
     assert!(matches!(events.last(), Some(ScanEvent::Done { .. })));

@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod control;
 pub mod index_db;
 pub mod model;
 pub mod namematch;

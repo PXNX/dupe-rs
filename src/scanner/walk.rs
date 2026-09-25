@@ -1,10 +1,10 @@
 use crate::config::ScanConfig;
+use crate::control::JobControl;
 use crate::model::{FileEntry, ScanEvent};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::{DirEntry, WalkDir};
 
 const PROGRESS_INTERVAL: usize = 200;
@@ -19,7 +19,7 @@ const PROGRESS_INTERVAL: usize = 200;
 /// and skipped rather than aborting the whole scan.
 pub fn walk_and_filter(
     config: &ScanConfig,
-    cancel: &Arc<AtomicBool>,
+    control: &JobControl,
     tx: &Sender<ScanEvent>,
 ) -> Vec<FileEntry> {
     let scanned = AtomicUsize::new(0);
@@ -27,7 +27,7 @@ pub fn walk_and_filter(
     let mut parallel_roots: Vec<PathBuf> = Vec::new();
 
     for root in &config.folders {
-        if cancel.load(Ordering::Relaxed) {
+        if control.checkpoint() {
             return candidates;
         }
 
@@ -35,7 +35,7 @@ pub fn walk_and_filter(
             walk_into(
                 WalkDir::new(root).follow_links(false).max_depth(1),
                 config,
-                cancel,
+                control,
                 tx,
                 &scanned,
                 &mut candidates,
@@ -51,7 +51,7 @@ pub fn walk_and_filter(
             .min_depth(1)
             .max_depth(1)
         {
-            if cancel.load(Ordering::Relaxed) {
+            if control.checkpoint() {
                 return candidates;
             }
             let entry = match entry {
@@ -71,7 +71,7 @@ pub fn walk_and_filter(
         }
     }
 
-    if cancel.load(Ordering::Relaxed) {
+    if control.checkpoint() {
         return candidates;
     }
 
@@ -82,7 +82,7 @@ pub fn walk_and_filter(
             walk_into(
                 WalkDir::new(dir).follow_links(false),
                 config,
-                cancel,
+                control,
                 tx,
                 &scanned,
                 &mut local,
@@ -101,13 +101,13 @@ pub fn walk_and_filter(
 fn walk_into(
     walker: WalkDir,
     config: &ScanConfig,
-    cancel: &Arc<AtomicBool>,
+    control: &JobControl,
     tx: &Sender<ScanEvent>,
     scanned: &AtomicUsize,
     out: &mut Vec<FileEntry>,
 ) {
     for entry in walker {
-        if cancel.load(Ordering::Relaxed) {
+        if control.checkpoint() {
             return;
         }
         let entry = match entry {

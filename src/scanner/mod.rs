@@ -7,32 +7,33 @@ mod walk;
 pub use hash::full_hash;
 
 use crate::config::{ScanConfig, ScanMode};
+use crate::control::JobControl;
 use crate::model::{DupeGroup, FileEntry, ScanEvent};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Entry point for a background scan; dispatches to the exact-content or
 /// similar-media pipeline depending on `config.mode`.
-pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBool>) {
+pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobControl>) {
     match config.mode {
-        ScanMode::ExactContent => run_exact_scan(config, tx, cancel),
-        ScanMode::SimilarMedia => similarity::run_similarity_scan(config, tx, cancel),
+        ScanMode::ExactContent => run_exact_scan(config, tx, control),
+        ScanMode::SimilarMedia => similarity::run_similarity_scan(config, tx, control),
     }
 }
 
 /// Orchestrates a full exact-content scan: walk & filter, group by size,
 /// narrow with a cheap partial-hash pass, then confirm with a full-file hash.
-/// Intended to run on a background thread; `cancel` is polled between phases
-/// and inside the walk.
-fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBool>) {
+/// Intended to run on a background thread; `control` is polled (to cancel or
+/// pause) between phases and inside the walk.
+fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobControl>) {
     let start = Instant::now();
-    let candidates = walk::walk_and_filter(&config, &cancel, &tx);
+    let candidates = walk::walk_and_filter(&config, &control, &tx);
 
-    if cancel.load(Ordering::Relaxed) {
+    if control.checkpoint() {
         let _ = tx.send(ScanEvent::Done {
             elapsed_ms: start.elapsed().as_millis(),
         });
@@ -49,7 +50,7 @@ fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicB
         .flat_map_iter(|files| {
             let mut map: HashMap<[u8; 32], Vec<FileEntry>> = HashMap::new();
             for f in files {
-                if cancel.load(Ordering::Relaxed) {
+                if control.checkpoint() {
                     break;
                 }
                 if let Ok(h) = hash::partial_hash(&f.path) {
@@ -74,7 +75,7 @@ fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicB
     let same_folder_only = config.same_folder_only;
 
     by_partial.into_par_iter().for_each(|files| {
-        if cancel.load(Ordering::Relaxed) {
+        if control.checkpoint() {
             return;
         }
         let mut by_full: HashMap<[u8; 32], Vec<FileEntry>> = HashMap::new();
@@ -152,8 +153,8 @@ mod tests {
         };
 
         let (tx, rx) = unbounded();
-        let cancel = Arc::new(AtomicBool::new(false));
-        run_scan(config, tx, cancel);
+        let control = Arc::new(JobControl::default());
+        run_scan(config, tx, control);
 
         let events: Vec<ScanEvent> = rx.try_iter().collect();
         let groups: Vec<DupeGroup> = events

@@ -176,6 +176,9 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 {
                     app.cancel_scan();
                 }
+                if crate::ui::controls::pause_resume_button(ui, app.is_scan_paused()).clicked() {
+                    app.toggle_scan_pause();
+                }
             } else if ui
                 .add_enabled(
                     can_scan,
@@ -189,13 +192,19 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 app.start_scan();
             }
 
+            let scan_paused = app.is_scan_paused();
             match &app.scan_state {
                 ScanState::Running {
                     scanned,
                     hash_progress,
                     ..
                 } => {
-                    ui.spinner();
+                    if scan_paused {
+                        ui.label(icons::ICON_PAUSE_CIRCLE.rich_text());
+                        ui.label("Paused —");
+                    } else {
+                        ui.spinner();
+                    }
                     match hash_progress {
                         Some(progress) => ui.label(hash_progress_text(progress)),
                         None => ui.label(format!("Scanned {scanned} files...")),

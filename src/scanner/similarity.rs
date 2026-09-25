@@ -1,4 +1,5 @@
 use crate::config::ScanConfig;
+use crate::control::JobControl;
 use crate::model::{FileEntry, MediaEntry, ScanEvent, SimilarGroup};
 use crossbeam_channel::Sender;
 use image::DynamicImage;
@@ -6,7 +7,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 const VIDEO_EXTENSIONS: &[&str] = &[
@@ -155,11 +156,11 @@ fn split_by_parent(files: Vec<MediaEntry>) -> Vec<Vec<MediaEntry>> {
 /// distance. Video files are skipped with a single warning if `ffmpeg` isn't
 /// on PATH; image comparison always works since it only needs the `image`
 /// crate already used for thumbnails.
-pub fn run_similarity_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Arc<AtomicBool>) {
+pub fn run_similarity_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobControl>) {
     let start = Instant::now();
-    let all_candidates = super::walk::walk_and_filter(&config, &cancel, &tx);
+    let all_candidates = super::walk::walk_and_filter(&config, &control, &tx);
 
-    if cancel.load(Ordering::Relaxed) {
+    if control.checkpoint() {
         let _ = tx.send(ScanEvent::Done {
             elapsed_ms: start.elapsed().as_millis(),
         });
@@ -188,7 +189,7 @@ pub fn run_similarity_scan(config: ScanConfig, tx: Sender<ScanEvent>, cancel: Ar
     let candidates: Vec<Candidate> = media
         .into_par_iter()
         .filter_map(|f| {
-            if cancel.load(Ordering::Relaxed) {
+            if control.checkpoint() {
                 return None;
             }
             let decoded = if is_video_path(&f.path) {

@@ -1,3 +1,4 @@
+pub mod controls;
 pub mod delete_confirm;
 pub mod format;
 pub mod results_grid;

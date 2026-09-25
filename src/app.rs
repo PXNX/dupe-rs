@@ -1,4 +1,5 @@
 use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_extension_list};
+use crate::control::{ActiveClock, JobControl};
 use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
@@ -11,8 +12,7 @@ use crossbeam_channel::Receiver;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 /// Estimates time left from linear progress so far: `done` out of `total`
 /// units after `elapsed`. `None` until there's a rate to go on, or once done.
@@ -32,12 +32,12 @@ pub fn estimate_remaining(done: u64, total: u64, elapsed: Duration) -> Option<Du
 pub struct HashProgress {
     pub total_bytes: u64,
     pub done_bytes: u64,
-    pub started_at: Instant,
+    pub clock: ActiveClock,
 }
 
 impl HashProgress {
     pub fn eta(&self) -> Option<Duration> {
-        estimate_remaining(self.done_bytes, self.total_bytes, self.started_at.elapsed())
+        estimate_remaining(self.done_bytes, self.total_bytes, self.clock.elapsed())
     }
 }
 
@@ -45,9 +45,11 @@ pub enum ScanState {
     Idle,
     Running {
         rx: Receiver<ScanEvent>,
-        cancel: Arc<AtomicBool>,
+        control: Arc<JobControl>,
         scanned: usize,
         hash_progress: Option<HashProgress>,
+        /// Whole-scan clock, so the final "done in" time leaves out pauses.
+        clock: ActiveClock,
     },
     Done {
         elapsed_ms: u128,
@@ -60,6 +62,7 @@ pub struct DeleteJob {
     /// Unique per app session; keeps each job's widgets' ids distinct.
     pub id: u64,
     rx: Receiver<DeleteEvent>,
+    control: Arc<JobControl>,
     /// Every path this job was given, so a later delete doesn't queue the
     /// same file twice while this one is still working through it.
     queued: HashSet<PathBuf>,
@@ -69,7 +72,7 @@ pub struct DeleteJob {
     pub skipped: usize,
     /// Whether files are removed outright rather than moved to the trash.
     pub permanent: bool,
-    pub started_at: Instant,
+    clock: ActiveClock,
     /// The file the worker is on right now, for the progress readout.
     pub current: Option<PathBuf>,
 }
@@ -77,12 +80,35 @@ pub struct DeleteJob {
 impl DeleteJob {
     /// Files processed per second so far, or `None` before the first one.
     pub fn items_per_sec(&self) -> Option<f64> {
-        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let elapsed = self.clock.elapsed().as_secs_f64();
         (self.done > 0 && elapsed > 0.0).then(|| self.done as f64 / elapsed)
     }
 
     pub fn eta(&self) -> Option<Duration> {
-        estimate_remaining(self.done as u64, self.total as u64, self.started_at.elapsed())
+        estimate_remaining(self.done as u64, self.total as u64, self.clock.elapsed())
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.control.is_paused()
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        self.control.set_paused(paused);
+        if paused {
+            self.clock.pause();
+        } else {
+            self.clock.resume();
+        }
+    }
+
+    /// Stops after the file in progress; what's already gone stays gone.
+    pub fn cancel(&mut self) {
+        self.control.cancel();
+        self.clock.resume();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.control.is_cancelled()
     }
 }
 
@@ -321,23 +347,51 @@ impl DupeApp {
         self.status_message = None;
 
         let (tx, rx) = crossbeam_channel::unbounded();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let control = Arc::new(JobControl::default());
         let config = self.config.clone();
-        let cancel_for_thread = cancel.clone();
+        let control_for_thread = control.clone();
         std::thread::spawn(move || {
-            scanner::run_scan(config, tx, cancel_for_thread);
+            scanner::run_scan(config, tx, control_for_thread);
         });
         self.scan_state = ScanState::Running {
             rx,
-            cancel,
+            control,
             scanned: 0,
             hash_progress: None,
+            clock: ActiveClock::start(),
         };
     }
 
     pub fn cancel_scan(&mut self) {
-        if let ScanState::Running { cancel, .. } = &self.scan_state {
-            cancel.store(true, Ordering::Relaxed);
+        if let ScanState::Running { control, .. } = &self.scan_state {
+            control.cancel();
+        }
+    }
+
+    pub fn is_scan_paused(&self) -> bool {
+        matches!(&self.scan_state, ScanState::Running { control, .. } if control.is_paused())
+    }
+
+    /// Pauses a running scan (its worker threads block at their next
+    /// checkpoint) or resumes a paused one.
+    pub fn toggle_scan_pause(&mut self) {
+        if let ScanState::Running {
+            control,
+            hash_progress,
+            clock,
+            ..
+        } = &mut self.scan_state
+        {
+            let paused = !control.is_paused();
+            control.set_paused(paused);
+            let clocks = std::iter::once(clock).chain(hash_progress.as_mut().map(|p| &mut p.clock));
+            for c in clocks {
+                if paused {
+                    c.pause();
+                } else {
+                    c.resume();
+                }
+            }
         }
     }
 
@@ -350,9 +404,10 @@ impl DupeApp {
         let mut cancelled = false;
         if let ScanState::Running {
             rx,
-            cancel,
+            control,
             scanned,
             hash_progress,
+            clock,
         } = &mut self.scan_state
         {
             for event in rx.try_iter().take(200) {
@@ -363,7 +418,7 @@ impl DupeApp {
                         *hash_progress = Some(HashProgress {
                             total_bytes,
                             done_bytes: 0,
-                            started_at: Instant::now(),
+                            clock: ActiveClock::start_paused(control.is_paused()),
                         });
                     }
                     ScanEvent::HashProgress { bytes_done } => {
@@ -377,8 +432,11 @@ impl DupeApp {
                     }
                     ScanEvent::SimilarGroupFound(group) => self.similar_groups.push(group),
                     ScanEvent::Done { elapsed_ms } => {
-                        cancelled = cancel.load(Ordering::Relaxed);
-                        new_state = Some(ScanState::Done { elapsed_ms })
+                        cancelled = control.is_cancelled();
+                        let paused_ms = clock.paused_total().as_millis();
+                        new_state = Some(ScanState::Done {
+                            elapsed_ms: elapsed_ms.saturating_sub(paused_ms),
+                        })
                     }
                     ScanEvent::Error(msg) => self.status_message = Some(msg),
                 }
@@ -501,8 +559,13 @@ impl DupeApp {
         self.selection.retain(|p| !queued.contains(p));
 
         let (tx, rx) = crossbeam_channel::unbounded();
+        let control = Arc::new(JobControl::default());
+        let control_for_thread = control.clone();
         std::thread::spawn(move || {
             for path in confirm.paths {
+                if control_for_thread.checkpoint() {
+                    break;
+                }
                 let _ = tx.send(DeleteEvent::FileStarted { path: path.clone() });
                 let deleted = path.exists()
                     && if permanent {
@@ -520,13 +583,14 @@ impl DupeApp {
         self.delete_jobs.push(DeleteJob {
             id,
             rx,
+            control,
             queued,
             total,
             done: 0,
             deleted_paths: HashSet::new(),
             skipped: 0,
             permanent,
-            started_at: Instant::now(),
+            clock: ActiveClock::start(),
             current: None,
         });
     }
@@ -570,6 +634,7 @@ impl DupeApp {
     }
 
     fn finish_delete_job(&mut self, job: DeleteJob) {
+        let cancelled = job.is_cancelled();
         let DeleteJob {
             deleted_paths,
             skipped,
@@ -597,11 +662,12 @@ impl DupeApp {
             "Moved"
         };
         let destination = if permanent { "" } else { " to the trash" };
+        let prefix = if cancelled { "Delete cancelled. " } else { "" };
         self.status_message = Some(if skipped == 0 {
-            format!("{action} {} file(s){destination}.", deleted_paths.len())
+            format!("{prefix}{action} {} file(s){destination}.", deleted_paths.len())
         } else {
             format!(
-                "{action} {} file(s){destination}; skipped {} (missing or failed).",
+                "{prefix}{action} {} file(s){destination}; skipped {} (missing or failed).",
                 deleted_paths.len(),
                 skipped
             )
@@ -616,24 +682,41 @@ impl DupeApp {
         if self.is_deleting() {
             let total: usize = self.delete_jobs.iter().map(|j| j.total).sum();
             let done: usize = self.delete_jobs.iter().map(|j| j.done).sum();
-            return if total == 0 {
+            let fraction = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+            return if self.delete_jobs.iter().all(DeleteJob::is_paused) {
+                TaskbarProgress::Paused(fraction)
+            } else if total == 0 {
                 TaskbarProgress::Indeterminate
             } else {
-                TaskbarProgress::Normal(done as f32 / total as f32)
+                TaskbarProgress::Normal(fraction)
             };
         }
-        if let ScanState::Running { hash_progress, .. } = &self.scan_state {
-            return match hash_progress {
-                Some(p) if p.total_bytes > 0 => {
-                    TaskbarProgress::Normal(p.done_bytes as f32 / p.total_bytes as f32)
-                }
-                _ => TaskbarProgress::Indeterminate,
+        if let ScanState::Running {
+            hash_progress,
+            control,
+            ..
+        } = &self.scan_state
+        {
+            let fraction = hash_progress
+                .as_ref()
+                .filter(|p| p.total_bytes > 0)
+                .map(|p| p.done_bytes as f32 / p.total_bytes as f32);
+            return match fraction {
+                _ if control.is_paused() => TaskbarProgress::Paused(fraction.unwrap_or(0.0)),
+                Some(f) => TaskbarProgress::Normal(f),
+                None => TaskbarProgress::Indeterminate,
             };
         }
         if let crate::reverse_search::IndexState::Running { scanned, total, .. } =
             &self.reverse_search.index_state
         {
-            return if *total == 0 {
+            return if self.reverse_search.is_index_paused() {
+                TaskbarProgress::Paused(if *total == 0 {
+                    0.0
+                } else {
+                    *scanned as f32 / *total as f32
+                })
+            } else if *total == 0 {
                 TaskbarProgress::Indeterminate
             } else {
                 TaskbarProgress::Normal(*scanned as f32 / *total as f32)

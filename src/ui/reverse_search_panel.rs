@@ -71,9 +71,17 @@ fn show_index_section(app: &mut DupeApp, ui: &mut Ui) {
                 {
                     app.reverse_search.cancel_indexing();
                 }
+                let paused = app.reverse_search.is_index_paused();
+                if crate::ui::controls::pause_resume_button(ui, paused).clicked() {
+                    app.reverse_search.toggle_index_pause();
+                }
                 if let IndexState::Running { scanned, total, .. } = &app.reverse_search.index_state
                 {
-                    ui.spinner();
+                    if paused {
+                        ui.label("Paused —");
+                    } else {
+                        ui.spinner();
+                    }
                     if *total > 0 {
                         ui.label(format!("Hashed {scanned} / {total} files..."));
                     } else {

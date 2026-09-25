@@ -7,7 +7,8 @@ use crossbeam_channel::Sender;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use crate::control::JobControl;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 pub enum IndexEvent {
@@ -24,16 +25,16 @@ pub enum IndexEvent {
 /// hash) with something else in the same scan. Building a reverse-search
 /// index needs every file's hash up front, since the point is to find
 /// matches against files that may not even be part of the current scan.
-pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, cancel: Arc<AtomicBool>) {
+pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<JobControl>) {
     let start = Instant::now();
 
     // `walk_and_filter` reports errors via `ScanEvent`; the indexer doesn't
     // surface those individually, so its end of this channel is just drained
     // and discarded rather than wired up to anything.
     let (walk_tx, _walk_rx) = crossbeam_channel::unbounded::<ScanEvent>();
-    let files = walk::walk_and_filter(&config, &cancel, &walk_tx);
+    let files = walk::walk_and_filter(&config, &control, &walk_tx);
 
-    if cancel.load(Ordering::Relaxed) {
+    if control.checkpoint() {
         let _ = tx.send(IndexEvent::Done {
             entries: Vec::new(),
             elapsed_ms: start.elapsed().as_millis(),
@@ -57,7 +58,7 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, cancel: Arc<At
     let entries: Vec<(String, IndexedFile)> = files
         .into_par_iter()
         .filter_map(|f| {
-            if cancel.load(Ordering::Relaxed) {
+            if control.checkpoint() {
                 return None;
             }
             let file_hash = hash::full_hash(&f.path).ok()?;

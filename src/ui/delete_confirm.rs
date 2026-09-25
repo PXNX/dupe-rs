@@ -6,7 +6,7 @@ use humansize::{DECIMAL, format_size};
 
 pub fn show(app: &mut DupeApp, ctx: &Context) {
     if app.is_deleting() {
-        show_jobs(ctx, &app.delete_jobs);
+        show_jobs(ctx, &mut app.delete_jobs);
     }
 
     let Some(confirm) = &mut app.delete_confirm else {
@@ -64,7 +64,7 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
 
 /// Non-modal, bottom-right list of every running delete, so the results stay
 /// usable (and further deletes can be started) while they work.
-fn show_jobs(ctx: &Context, jobs: &[DeleteJob]) {
+fn show_jobs(ctx: &Context, jobs: &mut [DeleteJob]) {
     let title = if jobs.len() == 1 {
         format!("{} Deleting...", icons::ICON_DELETE.codepoint)
     } else {
@@ -80,7 +80,7 @@ fn show_jobs(ctx: &Context, jobs: &[DeleteJob]) {
             // Fixed width so the window doesn't jitter as the current path
             // and rate text change length every frame.
             ui.set_width(420.0);
-            for (i, job) in jobs.iter().enumerate() {
+            for (i, job) in jobs.iter_mut().enumerate() {
                 if i > 0 {
                     ui.separator();
                 }
@@ -89,7 +89,7 @@ fn show_jobs(ctx: &Context, jobs: &[DeleteJob]) {
         });
 }
 
-fn show_job(ui: &mut egui::Ui, job: &DeleteJob) {
+fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) {
     let (done, total) = (job.done, job.total);
     let fraction = if total == 0 { 1.0 } else { done as f32 / total as f32 };
     ui.add(egui::ProgressBar::new(fraction).text(format!("{done} / {total} files")));
@@ -98,8 +98,14 @@ fn show_job(ui: &mut egui::Ui, job: &DeleteJob) {
         .current
         .as_ref()
         .map_or_else(|| "starting...".to_owned(), |p| p.display().to_string());
+    let verb = match (job.is_cancelled(), job.is_paused(), job.permanent) {
+        (true, _, _) => "Stopping after:",
+        (_, true, _) => "Paused at:",
+        (_, _, true) => "Deleting:",
+        _ => "Moving to trash:",
+    };
     ui.horizontal(|ui| {
-        ui.label(if job.permanent { "Deleting:" } else { "Moving to trash:" });
+        ui.label(verb);
         ui.add(egui::Label::new(RichText::new(current).monospace()).truncate());
     });
 
@@ -107,5 +113,27 @@ fn show_job(ui: &mut egui::Ui, job: &DeleteJob) {
         .items_per_sec()
         .map_or_else(|| "—".to_owned(), |r| format!("{r:.1} items/s"));
     let eta = job.eta().map_or_else(|| "estimating...".to_owned(), format_eta);
-    ui.label(format!("Speed: {rate}   ETA: {eta}"));
+    ui.horizontal(|ui| {
+        ui.label(format!("Speed: {rate}   ETA: {eta}"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(
+                    !job.is_cancelled(),
+                    egui::Button::new(RichText::from(format!(
+                        "{} Cancel",
+                        icons::ICON_STOP.codepoint
+                    ))),
+                )
+                .clicked()
+            {
+                job.cancel();
+            }
+            if !job.is_cancelled()
+                && crate::ui::controls::pause_resume_button(ui, job.is_paused()).clicked()
+            {
+                let paused = job.is_paused();
+                job.set_paused(!paused);
+            }
+        });
+    });
 }

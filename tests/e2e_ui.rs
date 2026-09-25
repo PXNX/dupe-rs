@@ -229,6 +229,43 @@ fn a_second_delete_can_start_while_the_first_is_still_running() {
 }
 
 #[test]
+fn pausing_a_delete_halts_it_until_resumed() {
+    let dir = tempdir().unwrap();
+    let paths: Vec<_> = (0..200)
+        .map(|i| {
+            let p = dir.path().join(format!("f{i}.txt"));
+            fs::write(&p, b"x").unwrap();
+            p
+        })
+        .collect();
+
+    let mut harness = harness();
+    harness.run();
+    {
+        let app = harness.state_mut();
+        app.selection.extend(paths.iter().cloned());
+        app.delete_selected();
+        app.delete_confirm.as_mut().unwrap().permanent = true;
+        app.confirm_delete();
+        app.delete_jobs[0].set_paused(true);
+    }
+    // The worker may finish the one file it was already on; after that it
+    // must sit still.
+    std::thread::sleep(Duration::from_millis(150));
+    harness.step();
+    let done_at_pause = harness.state().delete_jobs[0].done;
+    std::thread::sleep(Duration::from_millis(300));
+    harness.step();
+    assert_eq!(harness.state().delete_jobs[0].done, done_at_pause);
+    assert!(paths.iter().filter(|p| p.exists()).count() >= 200 - done_at_pause);
+    assert!(harness.query_by_label_contains("Resume").is_some());
+
+    harness.state_mut().delete_jobs[0].set_paused(false);
+    wait_for_delete_done(&mut harness);
+    assert!(paths.iter().all(|p| !p.exists()));
+}
+
+#[test]
 fn same_folder_only_checkbox_excludes_cross_folder_matches_live() {
     let dir = tempdir().unwrap();
     fs::create_dir(dir.path().join("a")).unwrap();
