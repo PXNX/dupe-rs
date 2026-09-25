@@ -97,8 +97,6 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         .on_hover_text("Don't descend into subfolders — scan only the top level of each added folder.");
                     ui.checkbox(&mut app.config.same_folder_only, "Same folder only")
                         .on_hover_text("Only mark files as duplicates if they live in the same folder as each other; cross-folder matches are ignored.");
-                    ui.checkbox(&mut app.config.skip_archives, "Skip RAR/split archives")
-                        .on_hover_text("Leave .rar files and split-archive volumes (.part1.rar, .r00, .7z.001, .z01, ...) out of the scan. Deleting one part of a set as a duplicate breaks the whole set.");
                 });
 
                 let mut remove_index = None;
@@ -152,6 +150,13 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                 .desired_width(200.0),
                         );
                     }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(icons::ICON_FOLDER_ZIP.rich_text());
+                    ui.checkbox(&mut app.config.skip_archives, "Skip RAR/split archives")
+                        .on_hover_text(
+                            "Leave .rar files and split-archive volumes (.part1.rar, .r00,                              .7z.001, .z01, ...) out of the scan. Deleting one part of a set as                              a duplicate breaks the whole set.",
+                        );
                 });
             });
         });
