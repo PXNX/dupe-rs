@@ -5,6 +5,7 @@ pub mod drive_fill;
 pub mod index_db;
 pub mod model;
 pub mod namematch;
+pub mod reencode;
 pub mod reverse_search;
 pub mod scanner;
 pub mod selection;

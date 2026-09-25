@@ -2,6 +2,7 @@ use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_exten
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::drive_fill::DriveFillState;
 use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
+use crate::reencode::ReencodeState;
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
@@ -121,6 +122,7 @@ pub enum AppTab {
     Scan,
     ReverseSearch,
     DriveFill,
+    Reencode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,6 +270,7 @@ pub struct DupeApp {
     pub tab: AppTab,
     pub reverse_search: ReverseSearchState,
     pub drive_fill: DriveFillState,
+    pub reencode: ReencodeState,
 
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
@@ -305,6 +308,7 @@ impl Default for DupeApp {
             tab: AppTab::Scan,
             reverse_search: ReverseSearchState::default(),
             drive_fill: DriveFillState::default(),
+            reencode: ReencodeState::default(),
 
             taskbar: Taskbar::default(),
             play_sounds: true,
@@ -682,6 +686,13 @@ impl DupeApp {
                 TaskbarProgress::Normal(fraction)
             };
         }
+        if let Some(job) = &self.reencode.job {
+            return match job.total_files {
+                None => TaskbarProgress::Indeterminate,
+                Some(_) if job.is_paused() => TaskbarProgress::Paused(job.fraction()),
+                Some(_) => TaskbarProgress::Normal(job.fraction()),
+            };
+        }
         if let Some(job) = &self.drive_fill.copy {
             return if job.is_paused() {
                 TaskbarProgress::Paused(job.fraction())
@@ -772,6 +783,16 @@ impl eframe::App for DupeApp {
             }
         }
 
+        if self.reencode.is_running() {
+            let changed = self.reencode.drain_events();
+            if changed {
+                ctx.request_repaint();
+            }
+            if self.reencode.is_running() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
         self.taskbar.set(frame, self.taskbar_progress());
 
         crate::ui::tab_bar::show(self, ui);
@@ -806,6 +827,7 @@ impl eframe::App for DupeApp {
         } else {
             egui::CentralPanel::default().show(ui, |ui| match self.tab {
                 AppTab::DriveFill => crate::ui::drive_fill_panel::show(self, ui),
+                AppTab::Reencode => crate::ui::reencode_panel::show(self, ui),
                 _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }

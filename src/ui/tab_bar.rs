@@ -23,6 +23,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 AppTab::DriveFill,
                 format!("{} Drive Fill", icons::ICON_HARD_DRIVE.codepoint),
             );
+            ui.selectable_value(
+                &mut app.tab,
+                AppTab::Reencode,
+                format!("{} Re-encode", icons::ICON_COMPRESS.codepoint),
+            );
         });
         ui.add_space(2.0);
     });

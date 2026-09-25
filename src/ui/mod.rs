@@ -2,6 +2,7 @@ pub mod controls;
 pub mod delete_confirm;
 pub mod drive_fill_panel;
 pub mod format;
+pub mod reencode_panel;
 pub mod results_grid;
 pub mod results_table;
 pub mod results_table_similar;

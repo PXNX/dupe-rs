@@ -413,3 +413,37 @@ fn drive_fill_tab_shows_its_panel_and_reads_the_targets_free_space() {
     assert!(space.total > 0 && space.free <= space.total && space.cluster >= 512);
     assert!(harness.query_by_label_contains("free of").is_some());
 }
+
+#[test]
+fn reencode_tab_replaces_a_bmp_with_a_smaller_lossless_webp() {
+    let dir = tempdir().unwrap();
+    let bmp = dir.path().join("scan.bmp");
+    image::ImageBuffer::from_fn(64, 48, |x, y| image::Rgb([(x * 4) as u8, (y * 5) as u8, 9]))
+        .save(&bmp)
+        .unwrap();
+    let pixels = image::open(&bmp).unwrap().to_rgb8();
+
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label_contains("Re-encode").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::Reencode);
+
+    harness.state_mut().reencode.folders.push(dir.path().to_path_buf());
+    harness.run();
+    harness.get_by_label_contains("Start").click();
+    harness.step();
+    let start = Instant::now();
+    while harness.state().reencode.is_running() {
+        harness.step();
+        assert!(start.elapsed() < Duration::from_secs(30), "re-encode timed out");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    harness.run();
+
+    let webp = dir.path().join("scan.webp");
+    assert!(!bmp.exists(), "original went to the Recycle Bin");
+    assert_eq!(image::open(&webp).unwrap().to_rgb8(), pixels);
+    assert_eq!(harness.state().reencode.totals.converted, 1);
+    assert!(harness.query_by_label_contains("Saved").is_some());
+}
