@@ -3,18 +3,7 @@ use crate::config::{ScanMode, SizeUnit};
 use egui::{Align, Layout, Panel, RichText, Ui};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
-use std::time::Duration;
-
-fn format_eta(d: Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m {}s", secs / 60, secs % 60)
-    } else {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    }
-}
+use crate::ui::format::format_eta;
 
 fn hash_progress_text(progress: &HashProgress) -> String {
     let done = format_size(progress.done_bytes, DECIMAL);

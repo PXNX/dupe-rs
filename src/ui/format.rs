@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub fn format_timestamp(t: SystemTime) -> String {
     let dt: DateTime<Local> = t.into();
@@ -20,6 +20,18 @@ pub fn format_duration_hms(elapsed_ms: u128) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
+/// Formats a remaining-time estimate compactly, e.g. `45s`, `3m 20s`, `2h 5m`.
+pub fn format_eta(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,6 +44,13 @@ mod tests {
     #[test]
     fn formats_an_hour_plus_duration() {
         assert_eq!(format_duration_hms(3_661_000), "01:01:01");
+    }
+
+    #[test]
+    fn formats_etas_compactly() {
+        assert_eq!(format_eta(Duration::from_secs(45)), "45s");
+        assert_eq!(format_eta(Duration::from_secs(200)), "3m 20s");
+        assert_eq!(format_eta(Duration::from_secs(7500)), "2h 5m");
     }
 
     #[test]

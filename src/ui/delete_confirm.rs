@@ -1,11 +1,12 @@
-use crate::app::{DeleteState, DupeApp};
+use crate::app::{DeleteJob, DeleteState, DupeApp};
+use crate::ui::format::format_eta;
 use egui::{Context, RichText, Window};
 use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 
 pub fn show(app: &mut DupeApp, ctx: &Context) {
-    if let DeleteState::Running { total, done, .. } = &app.delete_state {
-        show_progress(ctx, *done, *total);
+    if let DeleteState::Running(job) = &app.delete_state {
+        show_progress(ctx, job);
         return;
     }
 
@@ -62,7 +63,7 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
     }
 }
 
-fn show_progress(ctx: &Context, done: usize, total: usize) {
+fn show_progress(ctx: &Context, job: &DeleteJob) {
     Window::new(RichText::from(format!(
         "{} Deleting...",
         icons::ICON_DELETE.codepoint
@@ -71,11 +72,26 @@ fn show_progress(ctx: &Context, done: usize, total: usize) {
     .resizable(false)
     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
     .show(ctx, |ui| {
-        ui.set_min_width(280.0);
+        // Fixed width so the window doesn't jitter as the current path and
+        // rate text change length every frame.
+        ui.set_width(420.0);
+        let (done, total) = (job.done, job.total);
         let fraction = if total == 0 { 1.0 } else { done as f32 / total as f32 };
-        ui.add(
-            egui::ProgressBar::new(fraction)
-                .text(format!("{done} / {total} files")),
-        );
+        ui.add(egui::ProgressBar::new(fraction).text(format!("{done} / {total} files")));
+
+        let current = job
+            .current
+            .as_ref()
+            .map_or_else(|| "starting...".to_owned(), |p| p.display().to_string());
+        ui.horizontal(|ui| {
+            ui.label(if job.permanent { "Deleting:" } else { "Moving to trash:" });
+            ui.add(egui::Label::new(RichText::new(current).monospace()).truncate());
+        });
+
+        let rate = job
+            .items_per_sec()
+            .map_or_else(|| "—".to_owned(), |r| format!("{r:.1} items/s"));
+        let eta = job.eta().map_or_else(|| "estimating...".to_owned(), format_eta);
+        ui.label(format!("Speed: {rate}   ETA: {eta}"));
     });
 }

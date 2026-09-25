@@ -11,7 +11,20 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Estimates time left from linear progress so far: `done` out of `total`
+/// units after `elapsed`. `None` until there's a rate to go on, or once done.
+pub fn estimate_remaining(done: u64, total: u64, elapsed: Duration) -> Option<Duration> {
+    if done == 0 || done >= total {
+        return None;
+    }
+    let rate = done as f64 / elapsed.as_secs_f64();
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+    Some(Duration::from_secs_f64((total - done) as f64 / rate))
+}
 
 /// Byte-level progress of the full-file hashing pass, the slow, I/O-bound
 /// part of a scan on large trees. Used to show a GB-scanned readout and ETA.
@@ -22,17 +35,8 @@ pub struct HashProgress {
 }
 
 impl HashProgress {
-    pub fn eta(&self) -> Option<std::time::Duration> {
-        if self.done_bytes == 0 || self.done_bytes >= self.total_bytes {
-            return None;
-        }
-        let elapsed = self.started_at.elapsed().as_secs_f64();
-        let rate = self.done_bytes as f64 / elapsed;
-        if rate <= 0.0 {
-            return None;
-        }
-        let remaining = (self.total_bytes - self.done_bytes) as f64;
-        Some(std::time::Duration::from_secs_f64(remaining / rate))
+    pub fn eta(&self) -> Option<Duration> {
+        estimate_remaining(self.done_bytes, self.total_bytes, self.started_at.elapsed())
     }
 }
 
@@ -49,18 +53,36 @@ pub enum ScanState {
     },
 }
 
+/// A background delete in flight, fed by `DeleteEvent`s from its worker
+/// thread.
+pub struct DeleteJob {
+    rx: Receiver<DeleteEvent>,
+    pub total: usize,
+    pub done: usize,
+    pub deleted_paths: HashSet<PathBuf>,
+    pub skipped: usize,
+    /// Whether files are removed outright rather than moved to the trash.
+    pub permanent: bool,
+    pub started_at: Instant,
+    /// The file the worker is on right now, for the progress readout.
+    pub current: Option<PathBuf>,
+}
+
+impl DeleteJob {
+    /// Files processed per second so far, or `None` before the first one.
+    pub fn items_per_sec(&self) -> Option<f64> {
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        (self.done > 0 && elapsed > 0.0).then(|| self.done as f64 / elapsed)
+    }
+
+    pub fn eta(&self) -> Option<Duration> {
+        estimate_remaining(self.done as u64, self.total as u64, self.started_at.elapsed())
+    }
+}
+
 pub enum DeleteState {
     Idle,
-    Running {
-        rx: Receiver<DeleteEvent>,
-        total: usize,
-        done: usize,
-        deleted_paths: HashSet<PathBuf>,
-        skipped: usize,
-        /// Whether files are removed outright rather than moved to the trash;
-        /// only changes the wording of the final status message.
-        permanent: bool,
-    },
+    Running(DeleteJob),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -434,7 +456,7 @@ impl DupeApp {
     }
 
     pub fn is_deleting(&self) -> bool {
-        matches!(self.delete_state, DeleteState::Running { .. })
+        matches!(self.delete_state, DeleteState::Running(_))
     }
 
     /// Moves the confirmed selection to the trash (or, if the dialog's
@@ -452,6 +474,7 @@ impl DupeApp {
         let (tx, rx) = crossbeam_channel::unbounded();
         std::thread::spawn(move || {
             for path in confirm.paths {
+                let _ = tx.send(DeleteEvent::FileStarted { path: path.clone() });
                 let deleted = path.exists()
                     && if permanent {
                         std::fs::remove_file(&path).is_ok()
@@ -463,14 +486,16 @@ impl DupeApp {
             let _ = tx.send(DeleteEvent::Finished);
         });
 
-        self.delete_state = DeleteState::Running {
+        self.delete_state = DeleteState::Running(DeleteJob {
             rx,
             total,
             done: 0,
             deleted_paths: HashSet::new(),
             skipped: 0,
             permanent,
-        };
+            started_at: Instant::now(),
+            current: None,
+        });
     }
 
     /// Drains queued delete events (mirrors `drain_scan_events`), pruning
@@ -479,23 +504,20 @@ impl DupeApp {
     fn drain_delete_events(&mut self) -> bool {
         let mut changed = false;
         let mut finished = false;
-        if let DeleteState::Running {
-            rx,
-            done,
-            deleted_paths,
-            skipped,
-            ..
-        } = &mut self.delete_state
-        {
-            for event in rx.try_iter().take(200) {
+        if let DeleteState::Running(job) = &mut self.delete_state {
+            // Higher cap than the scan's: these events are trivially cheap to
+            // apply, and a permanent delete can churn through thousands of
+            // files a second.
+            for event in job.rx.try_iter().take(2000) {
                 changed = true;
                 match event {
+                    DeleteEvent::FileStarted { path } => job.current = Some(path),
                     DeleteEvent::FileDone { path, deleted } => {
-                        *done += 1;
+                        job.done += 1;
                         if deleted {
-                            deleted_paths.insert(path);
+                            job.deleted_paths.insert(path);
                         } else {
-                            *skipped += 1;
+                            job.skipped += 1;
                         }
                     }
                     DeleteEvent::Finished => finished = true,
@@ -504,12 +526,12 @@ impl DupeApp {
         }
 
         if finished
-            && let DeleteState::Running {
+            && let DeleteState::Running(DeleteJob {
                 deleted_paths,
                 skipped,
                 permanent,
                 ..
-            } = std::mem::replace(&mut self.delete_state, DeleteState::Idle)
+            }) = std::mem::replace(&mut self.delete_state, DeleteState::Idle)
         {
             for group in &mut self.groups {
                 group.files.retain(|f| !deleted_paths.contains(&f.path));
@@ -546,11 +568,11 @@ impl DupeApp {
     /// running. A delete takes precedence over a scan (it's the one the user
     /// is most likely waiting on), and a scan over reverse-search indexing.
     pub fn taskbar_progress(&self) -> TaskbarProgress {
-        if let DeleteState::Running { total, done, .. } = &self.delete_state {
-            return if *total == 0 {
+        if let DeleteState::Running(job) = &self.delete_state {
+            return if job.total == 0 {
                 TaskbarProgress::Indeterminate
             } else {
-                TaskbarProgress::Normal(*done as f32 / *total as f32)
+                TaskbarProgress::Normal(job.done as f32 / job.total as f32)
             };
         }
         if let ScanState::Running { hash_progress, .. } = &self.scan_state {
@@ -584,7 +606,7 @@ impl eframe::App for DupeApp {
                 ctx.request_repaint();
             }
             if self.is_scanning() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
 
@@ -594,7 +616,7 @@ impl eframe::App for DupeApp {
                 ctx.request_repaint();
             }
             if self.is_deleting() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
 
@@ -608,7 +630,7 @@ impl eframe::App for DupeApp {
                 ctx.request_repaint();
             }
             if self.reverse_search.is_indexing() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
 
@@ -648,5 +670,23 @@ impl eframe::App for DupeApp {
                 crate::ui::reverse_search_panel::show(self, ui);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimates_remaining_time_from_the_rate_so_far() {
+        let eta = estimate_remaining(25, 100, Duration::from_secs(10)).unwrap();
+        assert_eq!(eta.as_secs(), 30);
+    }
+
+    #[test]
+    fn no_estimate_before_progress_or_once_complete() {
+        assert!(estimate_remaining(0, 100, Duration::from_secs(5)).is_none());
+        assert!(estimate_remaining(100, 100, Duration::from_secs(5)).is_none());
+        assert!(estimate_remaining(5, 100, Duration::ZERO).is_none());
     }
 }

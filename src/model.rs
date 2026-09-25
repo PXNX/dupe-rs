@@ -63,6 +63,9 @@ pub enum ScanEvent {
 /// freeze the UI or leave the user staring at nothing.
 #[derive(Clone, Debug)]
 pub enum DeleteEvent {
+    /// The worker is about to delete `path`; drives the "currently deleting"
+    /// readout.
+    FileStarted { path: PathBuf },
     /// One file has been (attempted to be) deleted; `deleted` is false if it
     /// was missing or the trash call failed.
     FileDone { path: PathBuf, deleted: bool },
