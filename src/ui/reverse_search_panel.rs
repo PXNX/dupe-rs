@@ -34,13 +34,8 @@ fn show_index_section(app: &mut DupeApp, ui: &mut Ui) {
                     icons::ICON_FOLDER_OPEN.codepoint
                 )))
                 .clicked()
-                && let Some(folders) = rfd::FileDialog::new().pick_folders()
             {
-                for folder in folders {
-                    if !app.reverse_search.index_folders.contains(&folder) {
-                        app.reverse_search.index_folders.push(folder);
-                    }
-                }
+                app.start_pick(crate::ui::dialogs::PickPurpose::IndexFolders);
             }
         });
 
@@ -159,9 +154,8 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
                 icons::ICON_FILE_OPEN.codepoint
             )))
             .clicked()
-            && let Some(path) = rfd::FileDialog::new().pick_file()
         {
-            app.reverse_search.pick_file(path);
+            app.start_pick(crate::ui::dialogs::PickPurpose::SearchFile);
         }
     });
 

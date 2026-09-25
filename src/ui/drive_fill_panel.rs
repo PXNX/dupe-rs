@@ -1,6 +1,7 @@
 use crate::app::DupeApp;
 use crate::drive_fill::{CopyJob, DriveFillState, FolderSortColumn, FolderStatus, MeasureState};
 use crate::ui::controls::sort_header;
+use crate::ui::dialogs::PickPurpose;
 use crate::ui::format::{format_eta, format_timestamp};
 use egui::{Color32, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
@@ -20,7 +21,12 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     ui.add_space(8.0);
 
     let state = &mut app.drive_fill;
-    show_locations(state, ui);
+    let mut pick = None;
+    show_locations(state, ui, &mut pick);
+    if let Some(purpose) = pick {
+        app.start_pick(purpose);
+    }
+    let state = &mut app.drive_fill;
     ui.add_space(8.0);
     show_plan_summary(state, ui);
     ui.add_space(4.0);
@@ -40,7 +46,8 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     show_folder_table(state, ui);
 }
 
-fn show_locations(state: &mut DriveFillState, ui: &mut Ui) {
+/// Sets `pick` when a "Choose..." button is clicked.
+fn show_locations(state: &mut DriveFillState, ui: &mut Ui, pick: &mut Option<PickPurpose>) {
     ui.group(|ui| {
         ui.set_min_width(ui.available_width());
         let busy = state.is_busy();
@@ -55,9 +62,8 @@ fn show_locations(state: &mut DriveFillState, ui: &mut Ui) {
                         .add_enabled(!busy, egui::Button::new("Choose..."))
                         .on_hover_text("The folder whose subfolders get distributed across drives")
                         .clicked()
-                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
                     {
-                        state.set_source(dir);
+                        *pick = Some(PickPurpose::FillSource);
                     }
                     match &state.source {
                         Some(p) => ui.label(p.display().to_string()),
@@ -77,9 +83,8 @@ fn show_locations(state: &mut DriveFillState, ui: &mut Ui) {
                         .add_enabled(!state.is_copying(), egui::Button::new("Choose..."))
                         .on_hover_text("Where on the drive to be filled the folders are copied to")
                         .clicked()
-                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
                     {
-                        state.set_target(dir);
+                        *pick = Some(PickPurpose::FillTarget);
                     }
                     match &state.target {
                         Some(p) => ui.label(p.display().to_string()),

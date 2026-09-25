@@ -21,7 +21,12 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     ui.add_space(8.0);
 
     let state = &mut app.reencode;
-    show_options(state, ui);
+    let mut pick = false;
+    show_options(state, ui, &mut pick);
+    if pick {
+        app.start_pick(crate::ui::dialogs::PickPurpose::ReencodeFolders);
+    }
+    let state = &mut app.reencode;
     ui.add_space(8.0);
     if show_controls(state, ui) {
         app.pending_confirm = Some(crate::app::ConfirmAction::CancelReencode);
@@ -37,7 +42,8 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     show_results(state, ui);
 }
 
-fn show_options(state: &mut ReencodeState, ui: &mut Ui) {
+/// Sets `pick` when "Add Folder(s)" is clicked.
+fn show_options(state: &mut ReencodeState, ui: &mut Ui, pick: &mut bool) {
     let editable = !state.is_running();
     ui.group(|ui| {
         ui.set_min_width(ui.available_width());
@@ -51,13 +57,8 @@ fn show_options(state: &mut ReencodeState, ui: &mut Ui) {
                         icons::ICON_FOLDER_OPEN.codepoint
                     )))
                     .clicked()
-                    && let Some(folders) = rfd::FileDialog::new().pick_folders()
                 {
-                    for folder in folders {
-                        if !state.folders.contains(&folder) {
-                            state.folders.push(folder);
-                        }
-                    }
+                    *pick = true;
                 }
             });
             let mut remove = None;

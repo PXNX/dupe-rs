@@ -8,6 +8,7 @@ use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
 use crate::sound::{self, Sound};
 use crate::taskbar::{Taskbar, TaskbarProgress};
+use crate::ui::dialogs::{PendingPick, PickPurpose};
 use crate::ui::thumbnails::ThumbnailCache;
 use crate::view_cache::ExactRowsCache;
 use crossbeam_channel::Receiver;
@@ -289,6 +290,8 @@ pub struct DupeApp {
     pub play_sounds: bool,
 
     pub pending_confirm: Option<ConfirmAction>,
+    /// The file/folder picker currently open, if any (see `ui::dialogs`).
+    pub pending_pick: Option<PendingPick>,
     /// Set once closing has been confirmed, so the close goes through.
     allow_close: bool,
 }
@@ -329,6 +332,7 @@ impl Default for DupeApp {
             taskbar: Taskbar::default(),
             play_sounds: true,
             pending_confirm: None,
+            pending_pick: None,
             allow_close: false,
         }
     }
@@ -687,6 +691,45 @@ impl DupeApp {
         });
     }
 
+    /// Opens a native picker off the UI thread; its result is applied by
+    /// `apply_pick` once it closes. Ignored while another picker is open.
+    pub fn start_pick(&mut self, purpose: PickPurpose) {
+        if self.pending_pick.is_none() {
+            self.pending_pick = Some(PendingPick::open(purpose));
+        }
+    }
+
+    /// Puts paths chosen in a picker wherever `purpose` says.
+    pub fn apply_pick(&mut self, purpose: PickPurpose, paths: Vec<PathBuf>) {
+        fn add_unique(list: &mut Vec<PathBuf>, paths: Vec<PathBuf>) {
+            for p in paths {
+                if !list.contains(&p) {
+                    list.push(p);
+                }
+            }
+        }
+        match purpose {
+            PickPurpose::ScanFolders => add_unique(&mut self.config.folders, paths),
+            PickPurpose::IndexFolders => add_unique(&mut self.reverse_search.index_folders, paths),
+            PickPurpose::ReencodeFolders => add_unique(&mut self.reencode.folders, paths),
+            PickPurpose::SearchFile => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.reverse_search.pick_file(p);
+                }
+            }
+            PickPurpose::FillSource => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.drive_fill.set_source(p);
+                }
+            }
+            PickPurpose::FillTarget => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.drive_fill.set_target(p);
+                }
+            }
+        }
+    }
+
     /// Human-readable names of the background jobs still running.
     pub fn running_work(&self) -> Vec<&'static str> {
         let mut running = Vec::new();
@@ -899,6 +942,17 @@ impl eframe::App for DupeApp {
         }
 
         self.taskbar.set(frame, self.taskbar_progress());
+
+        if let Some(pick) = &self.pending_pick {
+            if let Some(paths) = pick.poll() {
+                let purpose = pick.purpose;
+                self.pending_pick = None;
+                self.apply_pick(purpose, paths);
+                ctx.request_repaint();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
 
         crate::ui::tab_bar::show(self, ui);
         crate::ui::confirm_dialog::show(self, &ctx);

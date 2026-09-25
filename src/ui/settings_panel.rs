@@ -89,13 +89,8 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                             icons::ICON_FOLDER_OPEN.codepoint
                         )))
                         .clicked()
-                        && let Some(folders) = rfd::FileDialog::new().pick_folders()
                     {
-                        for folder in folders {
-                            if !app.config.folders.contains(&folder) {
-                                app.config.folders.push(folder);
-                            }
-                        }
+                        app.start_pick(crate::ui::dialogs::PickPurpose::ScanFolders);
                     }
                     ui.separator();
                     ui.checkbox(&mut app.config.exclude_subfolders, "This folder only")

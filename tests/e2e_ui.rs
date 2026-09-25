@@ -544,3 +544,21 @@ fn closing_with_results_showing_asks_for_confirmation() {
     harness.run();
     assert!(harness.state().pending_confirm.is_none());
 }
+
+#[test]
+fn picker_results_land_where_they_were_requested() {
+    use dupe_rs::ui::dialogs::PickPurpose;
+    let dir = tempdir().unwrap();
+    let mut app = DupeApp::default();
+    app.play_sounds = false;
+    let folder = dir.path().to_path_buf();
+    app.apply_pick(PickPurpose::ScanFolders, vec![folder.clone(), folder.clone()]);
+    assert_eq!(app.config.folders, vec![folder.clone()], "no duplicate entries");
+    app.apply_pick(PickPurpose::ReencodeFolders, vec![folder.clone()]);
+    assert_eq!(app.reencode.folders, vec![folder.clone()]);
+    app.apply_pick(PickPurpose::FillTarget, vec![folder.clone()]);
+    assert_eq!(app.drive_fill.target, Some(folder));
+    // A cancelled dialog changes nothing.
+    app.apply_pick(PickPurpose::FillSource, Vec::new());
+    assert!(app.drive_fill.source.is_none());
+}
