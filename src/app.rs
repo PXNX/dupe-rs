@@ -56,6 +56,9 @@ pub enum DeleteState {
         done: usize,
         deleted_paths: HashSet<PathBuf>,
         skipped: usize,
+        /// Whether files are removed outright rather than moved to the trash;
+        /// only changes the wording of the final status message.
+        permanent: bool,
     },
 }
 
@@ -126,6 +129,9 @@ impl SelectCriterion {
 pub struct DeleteConfirmState {
     pub paths: Vec<PathBuf>,
     pub total_size: u64,
+    /// Bound to the dialog's "skip the Recycle Bin" checkbox. Always starts
+    /// unticked so the default stays the recoverable trash move.
+    pub permanent: bool,
 }
 
 /// Shared by `FileEntry` and `MediaEntry` so `select_by_criterion` can pick a
@@ -415,27 +421,38 @@ impl DupeApp {
                 .map(|f| f.size)
                 .sum(),
         };
-        self.delete_confirm = Some(DeleteConfirmState { paths, total_size });
+        self.delete_confirm = Some(DeleteConfirmState {
+            paths,
+            total_size,
+            permanent: false,
+        });
     }
 
     pub fn is_deleting(&self) -> bool {
         matches!(self.delete_state, DeleteState::Running { .. })
     }
 
-    /// Moves the confirmed selection to the trash on a background thread
-    /// (re-verifying each file still exists first, since it may have vanished
-    /// or changed since the scan), reporting progress so a large selection
-    /// doesn't leave the UI looking frozen.
+    /// Moves the confirmed selection to the trash (or, if the dialog's
+    /// permanent checkbox was ticked, removes it outright) on a background
+    /// thread, re-verifying each file still exists first since it may have
+    /// vanished or changed since the scan, and reporting progress so a large
+    /// selection doesn't leave the UI looking frozen.
     pub fn confirm_delete(&mut self) {
         let Some(confirm) = self.delete_confirm.take() else {
             return;
         };
         let total = confirm.paths.len();
+        let permanent = confirm.permanent;
 
         let (tx, rx) = crossbeam_channel::unbounded();
         std::thread::spawn(move || {
             for path in confirm.paths {
-                let deleted = path.exists() && trash::delete(&path).is_ok();
+                let deleted = path.exists()
+                    && if permanent {
+                        std::fs::remove_file(&path).is_ok()
+                    } else {
+                        trash::delete(&path).is_ok()
+                    };
                 let _ = tx.send(DeleteEvent::FileDone { path, deleted });
             }
             let _ = tx.send(DeleteEvent::Finished);
@@ -447,6 +464,7 @@ impl DupeApp {
             done: 0,
             deleted_paths: HashSet::new(),
             skipped: 0,
+            permanent,
         };
     }
 
@@ -484,6 +502,7 @@ impl DupeApp {
             && let DeleteState::Running {
                 deleted_paths,
                 skipped,
+                permanent,
                 ..
             } = std::mem::replace(&mut self.delete_state, DeleteState::Idle)
         {
@@ -498,11 +517,17 @@ impl DupeApp {
             self.similar_groups.retain(|g| g.files.len() > 1);
             self.selection.retain(|p| !deleted_paths.contains(p));
 
+            let action = if permanent {
+                "Permanently deleted"
+            } else {
+                "Moved"
+            };
+            let destination = if permanent { "" } else { " to the trash" };
             self.status_message = Some(if skipped == 0 {
-                format!("Moved {} file(s) to the trash.", deleted_paths.len())
+                format!("{action} {} file(s){destination}.", deleted_paths.len())
             } else {
                 format!(
-                    "Moved {} file(s) to the trash; skipped {} (missing or failed).",
+                    "{action} {} file(s){destination}; skipped {} (missing or failed).",
                     deleted_paths.len(),
                     skipped
                 )

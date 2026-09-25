@@ -9,7 +9,7 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
         return;
     }
 
-    let Some(confirm) = &app.delete_confirm else {
+    let Some(confirm) = &mut app.delete_confirm else {
         return;
     };
     let count = confirm.paths.len();
@@ -26,9 +26,20 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
     .resizable(false)
     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
     .show(ctx, |ui| {
-        ui.label(format!(
-            "Move {count} file(s) ({size_str}) to the trash? This cannot be undone from within dupe-rs."
-        ));
+        if confirm.permanent {
+            ui.label(format!(
+                "Permanently delete {count} file(s) ({size_str})? They will not go to the \
+                 Recycle Bin and cannot be recovered."
+            ));
+        } else {
+            ui.label(format!(
+                "Move {count} file(s) ({size_str}) to the trash? This cannot be undone from within dupe-rs."
+            ));
+        }
+        ui.checkbox(
+            &mut confirm.permanent,
+            "Delete permanently (skip the Recycle Bin)",
+        );
         ui.horizontal(|ui| {
             if ui
                 .button(

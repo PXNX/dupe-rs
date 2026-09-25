@@ -139,6 +139,48 @@ fn select_all_then_delete_key_confirms_and_moves_files_to_trash() {
 }
 
 #[test]
+fn permanent_delete_checkbox_removes_files_without_the_trash() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    fs::write(&a, b"duplicate payload").unwrap();
+    fs::write(&b, b"duplicate payload").unwrap();
+
+    let mut harness = harness();
+    harness.state_mut().config.folders.push(dir.path().to_path_buf());
+    harness.run();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.key_press(egui::Key::Delete);
+    harness.step();
+    harness.run();
+
+    harness.get_by_label_contains("Delete permanently").click();
+    harness.run();
+    assert!(harness.state().delete_confirm.as_ref().unwrap().permanent);
+
+    harness.get_by_label("Delete").click();
+    harness.step();
+    wait_for_delete_done(&mut harness);
+    harness.run();
+
+    assert!(!a.exists());
+    assert!(!b.exists());
+    assert!(harness.state().groups.is_empty());
+    assert!(
+        harness
+            .state()
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Permanently deleted 2 file(s)")),
+    );
+}
+
+#[test]
 fn same_folder_only_checkbox_excludes_cross_folder_matches_live() {
     let dir = tempdir().unwrap();
     fs::create_dir(dir.path().join("a")).unwrap();
