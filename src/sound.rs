@@ -41,9 +41,7 @@ pub fn play(sound: Sound) {
     let wav = sound.wav();
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Media::Audio::{
-            PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT,
-        };
+        use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
         // SAFETY: with SND_MEMORY the "name" is a pointer to a complete WAV
         // image, which `wav()` keeps alive for the whole process, so it
         // outlives the asynchronous playback.

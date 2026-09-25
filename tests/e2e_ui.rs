@@ -17,11 +17,10 @@ use tempfile::tempdir;
 fn harness() -> Harness<'static, DupeApp> {
     Harness::builder().build_eframe(|cc| {
         egui_material_icons::initialize(&cc.egui_ctx);
-        DupeApp {
-            // Keep test runs quiet.
-            play_sounds: false,
-            ..DupeApp::default()
-        }
+        let mut app = DupeApp::default();
+        // Keep test runs quiet.
+        app.play_sounds = false;
+        app
     })
 }
 
@@ -182,6 +181,51 @@ fn permanent_delete_checkbox_removes_files_without_the_trash() {
             .as_deref()
             .is_some_and(|m| m.starts_with("Permanently deleted 2 file(s)")),
     );
+}
+
+#[test]
+fn a_second_delete_can_start_while_the_first_is_still_running() {
+    let dir = tempdir().unwrap();
+    let paths: Vec<_> = ["a1.txt", "a2.txt", "b1.txt", "b2.txt"]
+        .iter()
+        .map(|n| dir.path().join(n))
+        .collect();
+    fs::write(&paths[0], b"first duplicate payload").unwrap();
+    fs::write(&paths[1], b"first duplicate payload").unwrap();
+    fs::write(&paths[2], b"second duplicate payload!").unwrap();
+    fs::write(&paths[3], b"second duplicate payload!").unwrap();
+
+    let mut harness = harness();
+    harness.state_mut().config.folders.push(dir.path().to_path_buf());
+    harness.run();
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+    assert_eq!(harness.state().groups.len(), 2);
+
+    for (to_delete, other) in [(&paths[1], &paths[0]), (&paths[3], &paths[2])] {
+        let app = harness.state_mut();
+        app.selection.insert(to_delete.clone());
+        app.selection.insert(other.clone());
+        app.delete_selected();
+        let confirm = app.delete_confirm.as_mut().unwrap();
+        // Only the file not already queued by an earlier job is included.
+        confirm.paths.retain(|p| p == to_delete);
+        confirm.permanent = true;
+        app.confirm_delete();
+        app.selection.clear();
+    }
+    assert!(harness.state().is_deleting());
+    assert!(harness.state().delete_confirm.is_none());
+
+    wait_for_delete_done(&mut harness);
+    harness.run();
+
+    assert!(paths[0].exists());
+    assert!(!paths[1].exists());
+    assert!(paths[2].exists());
+    assert!(!paths[3].exists());
+    assert!(harness.state().groups.is_empty());
 }
 
 #[test]
