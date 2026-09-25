@@ -2,7 +2,8 @@
 //! a (simulated) amount of free space, copy the plan onto a target, and find
 //! the copies again through reverse search.
 
-use dupe_rs::drive_fill::{DriveFillState, FolderStatus};
+use dupe_rs::app::SortDirection;
+use dupe_rs::drive_fill::{DriveFillState, FolderSortColumn, FolderStatus};
 use dupe_rs::reverse_search::ReverseSearchState;
 use dupe_rs::volume::DiskSpace;
 use std::fs;
@@ -38,6 +39,21 @@ fn fills_the_target_with_the_best_fitting_folders_and_indexes_them() {
     state.set_source(source.path().to_path_buf());
     wait_until_idle(&mut state, &mut reverse_search);
     assert_eq!(state.folders.len(), 3);
+
+    let names = |state: &DriveFillState| -> Vec<String> {
+        state
+            .sorted_indices()
+            .into_iter()
+            .map(|i| state.folders[i].name.clone())
+            .collect()
+    };
+    // Largest first by default, and the overview re-sorts by any column.
+    assert_eq!(names(&state), ["big", "mid", "small"]);
+    state.sort = Some((FolderSortColumn::Name, SortDirection::Desc));
+    assert_eq!(names(&state), ["small", "mid", "big"]);
+    state.sort = Some((FolderSortColumn::Files, SortDirection::Desc));
+    assert_eq!(names(&state)[0], "small");
+    state.sort = None;
 
     state.set_target(target.path().to_path_buf());
     state.reserve_mb = 0;

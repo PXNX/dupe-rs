@@ -1,8 +1,8 @@
-use crate::app::{DupeApp, SortColumn, SortDirection};
+use crate::app::{DupeApp, SortColumn};
+use crate::ui::controls::sort_header;
 use crate::ui::format::{format_timestamp, hex_prefix};
 use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
-use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
 
@@ -11,33 +11,6 @@ const ROW_HEIGHT: f32 = 22.0;
 fn cell_text(text: String, is_winner: bool) -> egui::RichText {
     let rt = egui::RichText::new(text);
     if is_winner { rt.strong() } else { rt }
-}
-
-/// Renders a header label that cycles Asc -> Desc -> unsorted on each click,
-/// showing an arrow when it's the active sort column.
-fn sort_header(
-    ui: &mut Ui,
-    label: &str,
-    column: SortColumn,
-    sort: &mut Option<(SortColumn, SortDirection)>,
-) {
-    let arrow = match sort {
-        Some((c, SortDirection::Asc)) if *c == column => icons::ICON_ARROW_UPWARD.codepoint,
-        Some((c, SortDirection::Desc)) if *c == column => icons::ICON_ARROW_DOWNWARD.codepoint,
-        _ => "",
-    };
-    let text = if arrow.is_empty() {
-        label.to_string()
-    } else {
-        format!("{label} {arrow}")
-    };
-    if ui.add(egui::Button::new(text).frame(false)).clicked() {
-        *sort = match sort {
-            Some((c, SortDirection::Asc)) if *c == column => Some((column, SortDirection::Desc)),
-            Some((c, SortDirection::Desc)) if *c == column => None,
-            _ => Some((column, SortDirection::Asc)),
-        };
-    }
 }
 
 /// Renders the exact-duplicates results as a table. Reads the pre-filtered,

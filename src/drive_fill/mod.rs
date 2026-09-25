@@ -7,6 +7,7 @@ pub mod copy;
 pub mod measure;
 pub mod plan;
 
+use crate::app::SortDirection;
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::index_db::IndexedFile;
 use crate::reverse_search::ReverseSearchState;
@@ -43,6 +44,17 @@ impl FolderStatus {
             FolderStatus::ExistsInTarget => "Already in target",
         }
     }
+}
+
+/// Sortable columns of the folder overview table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderSortColumn {
+    Name,
+    Size,
+    Files,
+    Modified,
+    Created,
+    Status,
 }
 
 #[derive(Default)]
@@ -144,6 +156,8 @@ pub struct DriveFillState {
     pub space: Option<DiskSpace>,
     pub plan: FillPlan,
     pub status: Option<String>,
+    /// Overview table sort; `None` keeps the default largest-first order.
+    pub sort: Option<(FolderSortColumn, SortDirection)>,
 }
 
 impl Default for DriveFillState {
@@ -159,6 +173,7 @@ impl Default for DriveFillState {
             space: None,
             plan: FillPlan::default(),
             status: None,
+            sort: None,
         }
     }
 }
@@ -232,6 +247,41 @@ impl DriveFillState {
             self.excluded.remove(&folder.path);
         }
         self.replan();
+    }
+
+    /// Indices into `folders` in the overview table's current sort order.
+    pub fn sorted_indices(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.folders.len()).collect();
+        let Some((column, direction)) = self.sort else {
+            return order;
+        };
+        let status_rank = |i: usize| {
+            self.plan
+                .statuses
+                .get(i)
+                .map_or(u8::MAX, |s| match s {
+                    FolderStatus::Planned => 0,
+                    FolderStatus::DoesNotFit => 1,
+                    FolderStatus::ExistsInTarget => 2,
+                    FolderStatus::Excluded => 3,
+                })
+        };
+        order.sort_by(|&a, &b| {
+            let (fa, fb) = (&self.folders[a], &self.folders[b]);
+            let ord = match column {
+                FolderSortColumn::Name => fa.name.to_lowercase().cmp(&fb.name.to_lowercase()),
+                FolderSortColumn::Size => fa.size.cmp(&fb.size),
+                FolderSortColumn::Files => fa.file_count.cmp(&fb.file_count),
+                FolderSortColumn::Modified => fa.modified.cmp(&fb.modified),
+                FolderSortColumn::Created => fa.created.cmp(&fb.created),
+                FolderSortColumn::Status => status_rank(a).cmp(&status_rank(b)),
+            };
+            match direction {
+                SortDirection::Asc => ord,
+                SortDirection::Desc => ord.reverse(),
+            }
+        });
+        order
     }
 
     /// Recomputes which folders to copy. Cheap enough to run on every input

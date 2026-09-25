@@ -1,9 +1,13 @@
 use crate::app::DupeApp;
-use crate::drive_fill::{CopyJob, DriveFillState, FolderStatus, MeasureState};
-use crate::ui::format::format_eta;
-use egui::{Color32, RichText, Ui};
+use crate::drive_fill::{CopyJob, DriveFillState, FolderSortColumn, FolderStatus, MeasureState};
+use crate::ui::controls::sort_header;
+use crate::ui::format::{format_eta, format_timestamp};
+use egui::{Color32, RichText, Sense, Ui};
+use egui_extras::{Column, TableBuilder};
 use egui_material_icons::icons;
 use humansize::{BINARY, DECIMAL, format_size};
+
+const ROW_HEIGHT: f32 = 22.0;
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     ui.heading("Drive Fill");
@@ -30,7 +34,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         ui.add_space(4.0);
     }
     ui.separator();
-    show_folder_list(state, ui);
+    show_folder_table(state, ui);
 }
 
 fn show_locations(state: &mut DriveFillState, ui: &mut Ui) {
@@ -209,33 +213,105 @@ fn show_copy_progress(job: &mut CopyJob, ui: &mut Ui) {
     });
 }
 
-fn show_folder_list(state: &mut DriveFillState, ui: &mut Ui) {
+/// Overview of every top-level source folder: name, size, file count,
+/// timestamps, and where it stands in the plan, with a checkbox to leave it
+/// out. Sortable by any column; double-click a name to open the folder.
+fn show_folder_table(state: &mut DriveFillState, ui: &mut Ui) {
     if state.folders.is_empty() {
         return;
     }
+    let total: u64 = state.folders.iter().map(|f| f.size).sum();
+    let files: u64 = state.folders.iter().map(|f| f.file_count).sum();
+    ui.label(format!(
+        "{} folder(s), {} in {files} file(s)",
+        state.folders.len(),
+        format_size(total, DECIMAL)
+    ));
+
     let editable = !state.is_copying();
+    let order = state.sorted_indices();
     let mut toggled = None;
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for (i, folder) in state.folders.iter().enumerate() {
-            let status = state.plan.statuses.get(i).copied();
-            ui.horizontal(|ui| {
-                let mut included = !state.excluded.contains(&folder.path);
-                if ui
-                    .add_enabled(editable, egui::Checkbox::without_text(&mut included))
-                    .changed()
-                {
-                    toggled = Some((i, !included));
-                }
-                ui.label(format!("{} {}", icons::ICON_FOLDER.codepoint, folder.name));
-                ui.weak(format_size(folder.size, DECIMAL));
-                if let Some(status) = status {
-                    ui.colored_label(status_color(status), status.label());
-                }
+    let mut open_path = None;
+    let mut sort = state.sort;
+
+    TableBuilder::new(ui)
+        .id_salt("drive_fill_folders")
+        .striped(true)
+        .column(Column::auto().at_least(24.0))
+        .column(Column::remainder().at_least(200.0).resizable(true))
+        .column(Column::auto().at_least(90.0).resizable(true))
+        .column(Column::auto().at_least(70.0).resizable(true))
+        .column(Column::auto().at_least(120.0).resizable(true))
+        .column(Column::auto().at_least(120.0).resizable(true))
+        .column(Column::auto().at_least(110.0))
+        .header(20.0, |mut header| {
+            header.col(|ui| {
+                ui.label("");
             });
-        }
-    });
+            let columns = [
+                ("Folder", FolderSortColumn::Name),
+                ("Size", FolderSortColumn::Size),
+                ("Files", FolderSortColumn::Files),
+                ("Modified", FolderSortColumn::Modified),
+                ("Created", FolderSortColumn::Created),
+                ("Status", FolderSortColumn::Status),
+            ];
+            for (label, column) in columns {
+                header.col(|ui| sort_header(ui, label, column, &mut sort));
+            }
+        })
+        .body(|body| {
+            body.rows(ROW_HEIGHT, order.len(), |mut row| {
+                let i = order[row.index()];
+                let folder = &state.folders[i];
+                let status = state.plan.statuses.get(i).copied();
+                row.col(|ui| {
+                    let mut included = !state.excluded.contains(&folder.path);
+                    if ui
+                        .add_enabled(editable, egui::Checkbox::without_text(&mut included))
+                        .on_hover_text("Consider this folder for the plan")
+                        .changed()
+                    {
+                        toggled = Some((i, !included));
+                    }
+                });
+                row.col(|ui| {
+                    let text = format!("{} {}", icons::ICON_FOLDER.codepoint, folder.name);
+                    let response = ui
+                        .add(egui::Label::new(text).truncate().sense(Sense::click()))
+                        .on_hover_text(folder.path.display().to_string());
+                    if response.double_clicked() {
+                        open_path = Some(folder.path.clone());
+                    }
+                });
+                row.col(|ui| {
+                    ui.label(format_size(folder.size, DECIMAL));
+                });
+                row.col(|ui| {
+                    ui.label(folder.file_count.to_string());
+                });
+                row.col(|ui| {
+                    ui.label(format_timestamp(folder.modified));
+                });
+                row.col(|ui| {
+                    ui.label(format_timestamp(folder.created));
+                });
+                row.col(|ui| {
+                    if let Some(status) = status {
+                        ui.colored_label(status_color(status), status.label());
+                    }
+                });
+            });
+        });
+
+    state.sort = sort;
     if let Some((i, excluded)) = toggled {
         state.set_excluded(i, excluded);
+    }
+    if let Some(path) = open_path
+        && let Err(err) = open::that(&path)
+    {
+        state.status = Some(format!("Couldn't open {}: {err}", path.display()));
     }
 }
 
