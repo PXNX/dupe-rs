@@ -1,6 +1,6 @@
 use crate::config::ScanConfig;
 use crate::control::JobControl;
-use crate::index_db::{IndexDb, IndexedFile, hex_encode};
+use crate::index_db::{IndexDb, IndexedFile, VolumeUsage, hex_encode};
 use crate::scanner::indexer::{self, IndexEvent};
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
@@ -130,6 +130,7 @@ impl ReverseSearchState {
             let drive_count = by_volume.len();
             for ((drive, label), volume_entries) in by_volume {
                 self.db.reindex_volume(&drive, &label, volume_entries);
+                self.record_volume_usage(&drive, &label);
             }
             self.status = Some(match self.db.save(&self.db_path) {
                 Ok(()) => format!(
@@ -144,11 +145,38 @@ impl ReverseSearchState {
         changed
     }
 
-    /// Adds files hashed elsewhere (e.g. by a drive-fill copy) to the index
-    /// and saves it.
+    /// Snapshots how full `drive_letter` is right now into the index (saved
+    /// with the next `save`). Silently skipped if the drive can't be queried.
+    pub fn record_volume_usage(&mut self, drive_letter: &str, volume_label: &str) {
+        if drive_letter.is_empty() {
+            return;
+        }
+        let root = PathBuf::from(format!("{drive_letter}\\"));
+        if let Some(space) = crate::volume::disk_space(&root) {
+            self.db.record_usage(
+                drive_letter,
+                volume_label,
+                VolumeUsage {
+                    total: space.total,
+                    free: space.free,
+                    recorded_at: std::time::SystemTime::now(),
+                },
+            );
+        }
+    }
+
+    /// Adds files hashed elsewhere (e.g. by a drive-fill copy) to the index,
+    /// records the drive they landed on's current usage, and saves it.
     pub fn add_to_index(&mut self, entries: Vec<(String, IndexedFile)>) -> std::io::Result<()> {
         if entries.is_empty() {
             return Ok(());
+        }
+        let volumes: std::collections::HashSet<(String, String)> = entries
+            .iter()
+            .map(|(_, f)| (f.drive_letter.clone(), f.volume_label.clone()))
+            .collect();
+        for (drive, label) in volumes {
+            self.record_volume_usage(&drive, &label);
         }
         self.db.upsert(entries);
         let saved = self.db.save(&self.db_path);

@@ -376,6 +376,13 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
     harness.run();
 
     assert!(harness.state().reverse_search.db.total_files() >= 1);
+    // The indexed drive's fill level is saved alongside its files.
+    let drive = dupe_rs::volume::drive_letter_of(dir.path());
+    let label = dupe_rs::volume::volume_info(&drive).label;
+    let usage = harness.state().reverse_search.db.usage(&drive, &label).copied();
+    assert!(usage.is_some_and(|u| u.total > 0 && u.used() <= u.total));
+    harness.run();
+    assert!(harness.query_by_label_contains("% used").is_some());
 
     let picked = dir.path().join("picked_copy.txt");
     fs::write(&picked, b"reverse search payload").unwrap();

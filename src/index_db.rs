@@ -25,6 +25,29 @@ impl IndexedFile {
     }
 }
 
+/// How full a volume was the last time it was indexed or filled, so the
+/// reverse-search tab can show each drive's usage even while it's unplugged.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VolumeUsage {
+    pub total: u64,
+    pub free: u64,
+    pub recorded_at: SystemTime,
+}
+
+impl VolumeUsage {
+    pub fn used(&self) -> u64 {
+        self.total.saturating_sub(self.free)
+    }
+
+    pub fn used_fraction(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            self.used() as f32 / self.total as f32
+        }
+    }
+}
+
 /// Hex-encodes a content hash for use as an `IndexDb` key — `serde_json`
 /// requires string map keys, so the raw `[u8; 32]` blake3 hash can't be used
 /// directly.
@@ -39,6 +62,14 @@ pub fn hex_encode(hash: &[u8; 32]) -> String {
 #[derive(Default, Serialize, Deserialize)]
 pub struct IndexDb {
     entries: HashMap<String, Vec<IndexedFile>>,
+    /// Keyed by `volume_key`. `default` so indexes saved before this field
+    /// existed still load.
+    #[serde(default)]
+    volumes: HashMap<String, VolumeUsage>,
+}
+
+fn volume_key(drive_letter: &str, volume_label: &str) -> String {
+    format!("{drive_letter}|{volume_label}")
 }
 
 impl IndexDb {
@@ -129,6 +160,17 @@ impl IndexDb {
             }
         }
         out
+    }
+
+    /// Records how full a volume is right now (replacing any earlier record).
+    pub fn record_usage(&mut self, drive_letter: &str, volume_label: &str, usage: VolumeUsage) {
+        self.volumes
+            .insert(volume_key(drive_letter, volume_label), usage);
+    }
+
+    /// The last recorded usage of a volume, if any.
+    pub fn usage(&self, drive_letter: &str, volume_label: &str) -> Option<&VolumeUsage> {
+        self.volumes.get(&volume_key(drive_letter, volume_label))
     }
 
     pub fn total_files(&self) -> usize {
@@ -269,6 +311,27 @@ mod tests {
         let loaded = IndexDb::load(&path);
         assert_eq!(loaded.total_files(), 1);
         assert_eq!(loaded.matches("hash1", &file("D:", "nonexistent")).len(), 1);
+    }
+
+    #[test]
+    fn volume_usage_round_trips_and_old_indexes_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.json");
+        let usage = VolumeUsage {
+            total: 1000,
+            free: 250,
+            recorded_at: SystemTime::UNIX_EPOCH + Duration::from_secs(5),
+        };
+        let mut db = IndexDb::default();
+        db.record_usage("D:", "data", usage);
+        db.save(&path).unwrap();
+        assert_eq!(IndexDb::load(&path).usage("D:", "data"), Some(&usage));
+        assert_eq!(usage.used(), 750);
+        assert!(IndexDb::load(&path).usage("D:", "other").is_none());
+
+        // An index written before `volumes` existed.
+        std::fs::write(&path, br#"{"entries":{}}"#).unwrap();
+        assert!(IndexDb::load(&path).usage("D:", "data").is_none());
     }
 
     #[test]

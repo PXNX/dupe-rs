@@ -111,15 +111,36 @@ fn show_index_section(app: &mut DupeApp, ui: &mut Ui) {
         if drives.is_empty() {
             ui.label("No drives indexed yet.");
         } else {
-            let summary = drives
-                .iter()
-                .map(|(letter, label)| format!("{label} ({letter})"))
-                .collect::<Vec<_>>()
-                .join(", ");
             ui.label(format!(
-                "Indexed: {summary} — {} file(s) total.",
+                "Indexed {} drive(s), {} file(s) total:",
+                drives.len(),
                 app.reverse_search.db.total_files()
             ));
+            for (letter, label) in &drives {
+                ui.horizontal(|ui| {
+                    ui.label(icons::ICON_HARD_DRIVE.rich_text());
+                    ui.label(format!("{label} ({letter})"));
+                    match app.reverse_search.db.usage(letter, label) {
+                        Some(usage) => {
+                            ui.add(
+                                egui::ProgressBar::new(usage.used_fraction())
+                                    .desired_width(160.0)
+                                    .text(format!("{:.0}% used", usage.used_fraction() * 100.0)),
+                            );
+                            ui.label(format!(
+                                "{} of {} used, {} free",
+                                format_size(usage.used(), DECIMAL),
+                                format_size(usage.total, DECIMAL),
+                                format_size(usage.free, DECIMAL),
+                            ));
+                            ui.weak(format!("as of {}", format_timestamp(usage.recorded_at)));
+                        }
+                        None => {
+                            ui.weak("usage not recorded yet (re-index to capture it)");
+                        }
+                    }
+                });
+            }
         }
 
         if let Some(status) = &app.reverse_search.status {
