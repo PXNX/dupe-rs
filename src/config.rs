@@ -40,6 +40,10 @@ pub struct ScanConfig {
     /// Max Hamming distance (out of 64 bits) between two perceptual hashes to
     /// still count as the same picture, only used in `ScanMode::SimilarMedia`.
     pub similarity_threshold: u32,
+    /// Leave RAR archives and split-archive volumes out of the scan (see
+    /// `crate::archive`): deleting one part of a set as "a duplicate" breaks
+    /// the whole set.
+    pub skip_archives: bool,
 }
 
 impl Default for ScanConfig {
@@ -53,6 +57,7 @@ impl Default for ScanConfig {
             extensions: ExtensionFilter::All,
             mode: ScanMode::ExactContent,
             similarity_threshold: 10,
+            skip_archives: true,
         }
     }
 }

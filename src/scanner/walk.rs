@@ -158,6 +158,15 @@ fn process_entry(
         return None;
     }
 
+    if config.skip_archives
+        && entry
+            .file_name()
+            .to_str()
+            .is_some_and(crate::archive::is_archive_part)
+    {
+        return None;
+    }
+
     let ext = entry
         .path()
         .extension()

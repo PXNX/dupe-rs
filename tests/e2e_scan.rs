@@ -187,3 +187,27 @@ fn cancelling_before_scan_starts_yields_no_groups() {
     assert!(matches!(events.last(), Some(ScanEvent::Done { .. })));
     assert!(!events.iter().any(|e| matches!(e, ScanEvent::GroupFound(_))));
 }
+
+#[test]
+fn rar_and_split_archive_volumes_are_skipped_unless_asked_for() {
+    let dir = tempdir().unwrap();
+    for sub in ["a", "b"] {
+        let d = dir.path().join(sub);
+        fs::create_dir(&d).unwrap();
+        fs::write(d.join("movie.part1.rar"), b"volume one bytes").unwrap();
+        fs::write(d.join("movie.part2.rar"), b"volume two bytes").unwrap();
+        fs::write(d.join("old.r00"), b"old style volume").unwrap();
+        fs::write(d.join("backup.7z.001"), b"seven zip split").unwrap();
+        fs::write(d.join("photo.jpg"), b"an ordinary duplicate").unwrap();
+    }
+
+    let groups = scan(config_for(dir.path()));
+    assert_eq!(groups.len(), 1, "only the ordinary file pairs up");
+    assert!(groups[0].files[0].path.ends_with("photo.jpg"));
+
+    let groups = scan(ScanConfig {
+        skip_archives: false,
+        ..config_for(dir.path())
+    });
+    assert_eq!(groups.len(), 5);
+}

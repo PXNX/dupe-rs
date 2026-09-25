@@ -80,6 +80,9 @@ impl ReverseSearchState {
         }
         let config = ScanConfig {
             folders: self.index_folders.clone(),
+            // Archives are worth finding again too; the skip only exists to
+            // keep duplicate *deletion* from breaking split sets.
+            skip_archives: false,
             ..ScanConfig::default()
         };
         let (tx, rx) = crossbeam_channel::unbounded();
