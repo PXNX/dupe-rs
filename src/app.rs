@@ -859,6 +859,15 @@ impl eframe::App for DupeApp {
             self.refresh_exact_rows_cache();
         }
 
+        if self.reverse_search.is_looking_up() {
+            if self.reverse_search.drain_lookup() {
+                ctx.request_repaint();
+            }
+            if self.reverse_search.is_looking_up() {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+
         if self.reverse_search.is_indexing() {
             let changed = self.reverse_search.drain_index_events();
             if changed {
@@ -869,12 +878,12 @@ impl eframe::App for DupeApp {
             }
         }
 
-        if self.drive_fill.is_busy() {
+        if self.drive_fill.needs_polling() {
             let changed = self.drive_fill.drain_events(&mut self.reverse_search);
             if changed {
                 ctx.request_repaint();
             }
-            if self.drive_fill.is_busy() {
+            if self.drive_fill.needs_polling() {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }

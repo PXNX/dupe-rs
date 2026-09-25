@@ -387,7 +387,14 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
     let picked = dir.path().join("picked_copy.txt");
     fs::write(&picked, b"reverse search payload").unwrap();
     harness.state_mut().reverse_search.pick_file(picked);
+    let start = Instant::now();
+    while harness.state().reverse_search.is_looking_up() {
+        harness.step();
+        assert!(start.elapsed() < Duration::from_secs(10), "lookup timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     harness.run();
+    assert_eq!(harness.state().reverse_search.results_attached, vec![Some(true)]);
 
     assert_eq!(harness.state().reverse_search.results.len(), 1);
     // rel_path is relative to the volume root (not the scanned folder), so
@@ -408,6 +415,12 @@ fn drive_fill_tab_shows_its_panel_and_reads_the_targets_free_space() {
 
     let target = tempdir().unwrap();
     harness.state_mut().drive_fill.set_target(target.path().to_path_buf());
+    let start = Instant::now();
+    while harness.state().drive_fill.is_reading_target() {
+        harness.step();
+        assert!(start.elapsed() < Duration::from_secs(10), "reading target timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     harness.run();
     let space = harness.state().drive_fill.space.expect("free space of a temp dir");
     assert!(space.total > 0 && space.free <= space.total && space.cluster >= 512);

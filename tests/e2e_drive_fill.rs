@@ -12,7 +12,8 @@ use tempfile::tempdir;
 
 fn wait_until_idle(state: &mut DriveFillState, reverse_search: &mut ReverseSearchState) {
     let start = Instant::now();
-    while state.is_busy() {
+    while state.needs_polling() || reverse_search.is_looking_up() {
+        reverse_search.drain_lookup();
         state.drain_events(reverse_search);
         assert!(start.elapsed() < Duration::from_secs(20), "drive fill timed out");
         std::thread::sleep(Duration::from_millis(10));
@@ -56,6 +57,7 @@ fn fills_the_target_with_the_best_fitting_folders_and_indexes_them() {
     state.sort = None;
 
     state.set_target(target.path().to_path_buf());
+    wait_until_idle(&mut state, &mut reverse_search);
     state.reserve_mb = 0;
     state.space = Some(DiskSpace {
         free: 105_000,
@@ -92,6 +94,7 @@ fn fills_the_target_with_the_best_fitting_folders_and_indexes_them() {
 
     // Reverse search on the source file finds the copy on the target.
     reverse_search.pick_file(source.path().join("mid/data.bin"));
+    wait_until_idle(&mut state, &mut reverse_search);
     assert_eq!(reverse_search.results.len(), 1);
     assert_eq!(
         reverse_search.results[0].absolute_path(),

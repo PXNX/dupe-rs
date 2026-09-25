@@ -7,6 +7,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Results of the background work behind a reverse-search lookup. Both steps
+/// touch the disk (hashing the picked file, probing the drives matches live
+/// on), which can stall for seconds on a sleeping or slow drive, so neither
+/// runs on the UI thread.
+enum LookupEvent {
+    Hashed { hash_hex: String, probe: IndexedFile },
+    Failed(String),
+    /// Per result: whether its drive is attached and the file is there.
+    Attached(Vec<bool>),
+}
+
 pub enum IndexState {
     Idle,
     Running {
@@ -29,7 +40,10 @@ pub struct ReverseSearchState {
     pub index_state: IndexState,
     pub picked_file: Option<PathBuf>,
     pub results: Vec<IndexedFile>,
+    /// Parallel to `results`; `None` while still being checked.
+    pub results_attached: Vec<Option<bool>>,
     pub status: Option<String>,
+    lookup_rx: Option<Receiver<LookupEvent>>,
 }
 
 impl Default for ReverseSearchState {
@@ -50,7 +64,9 @@ impl ReverseSearchState {
             index_state: IndexState::Idle,
             picked_file: None,
             results: Vec::new(),
+            results_attached: Vec::new(),
             status: None,
+            lookup_rx: None,
         }
     }
 
@@ -113,14 +129,21 @@ impl ReverseSearchState {
                         *scanned = s;
                         *total = t;
                     }
-                    IndexEvent::Done { entries, elapsed_ms } => {
-                        finished = Some((entries, elapsed_ms));
+                    IndexEvent::Done {
+                        entries,
+                        elapsed_ms,
+                        usage,
+                    } => {
+                        finished = Some((entries, elapsed_ms, usage));
                     }
                 }
             }
         }
 
-        if let Some((entries, elapsed_ms)) = finished {
+        if let Some((entries, elapsed_ms, usage)) = finished {
+            for (drive, label, u) in usage {
+                self.db.record_usage(&drive, &label, u);
+            }
             let file_count = entries.len();
             let mut by_volume: HashMap<(String, String), Vec<(String, IndexedFile)>> = HashMap::new();
             for (hash_hex, file) in entries {
@@ -130,7 +153,6 @@ impl ReverseSearchState {
             let drive_count = by_volume.len();
             for ((drive, label), volume_entries) in by_volume {
                 self.db.reindex_volume(&drive, &label, volume_entries);
-                self.record_volume_usage(&drive, &label);
             }
             self.status = Some(match self.db.save(&self.db_path) {
                 Ok(()) => format!(
@@ -145,38 +167,19 @@ impl ReverseSearchState {
         changed
     }
 
-    /// Snapshots how full `drive_letter` is right now into the index (saved
-    /// with the next `save`). Silently skipped if the drive can't be queried.
-    pub fn record_volume_usage(&mut self, drive_letter: &str, volume_label: &str) {
-        if drive_letter.is_empty() {
-            return;
-        }
-        let root = PathBuf::from(format!("{drive_letter}\\"));
-        if let Some(space) = crate::volume::disk_space(&root) {
-            self.db.record_usage(
-                drive_letter,
-                volume_label,
-                VolumeUsage {
-                    total: space.total,
-                    free: space.free,
-                    recorded_at: std::time::SystemTime::now(),
-                },
-            );
-        }
-    }
-
     /// Adds files hashed elsewhere (e.g. by a drive-fill copy) to the index,
-    /// records the drive they landed on's current usage, and saves it.
-    pub fn add_to_index(&mut self, entries: Vec<(String, IndexedFile)>) -> std::io::Result<()> {
-        if entries.is_empty() {
-            return Ok(());
+    /// along with the usage of the drive they landed on (measured by that
+    /// worker), and saves it.
+    pub fn add_to_index(
+        &mut self,
+        entries: Vec<(String, IndexedFile)>,
+        usage: Option<(String, String, VolumeUsage)>,
+    ) -> std::io::Result<()> {
+        if let Some((drive, label, u)) = usage {
+            self.db.record_usage(&drive, &label, u);
         }
-        let volumes: std::collections::HashSet<(String, String)> = entries
-            .iter()
-            .map(|(_, f)| (f.drive_letter.clone(), f.volume_label.clone()))
-            .collect();
-        for (drive, label) in volumes {
-            self.record_volume_usage(&drive, &label);
+        if entries.is_empty() {
+            return self.db.save(&self.db_path);
         }
         self.db.upsert(entries);
         let saved = self.db.save(&self.db_path);
@@ -184,40 +187,102 @@ impl ReverseSearchState {
         saved
     }
 
-    /// Sets the file to find matches for and looks them up immediately.
-    /// Hashing is done inline (blocking) rather than on a background thread:
-    /// a single file's hash is fast enough for this not to be worth the extra
-    /// state machine a background variant would need.
+    /// Sets the file to find matches for and starts looking them up in the
+    /// background (see `LookupEvent`).
     pub fn pick_file(&mut self, path: PathBuf) {
         self.picked_file = Some(path);
         self.refresh_results();
     }
 
+    pub fn is_looking_up(&self) -> bool {
+        self.lookup_rx.is_some()
+    }
+
+    /// Re-runs the lookup for the picked file, e.g. after the index changed.
     fn refresh_results(&mut self) {
+        self.results.clear();
+        self.results_attached.clear();
         let Some(path) = self.picked_file.clone() else {
-            self.results.clear();
+            self.lookup_rx = None;
             return;
         };
-        let hash = match crate::scanner::full_hash(&path) {
-            Ok(h) => h,
-            Err(err) => {
-                self.status = Some(format!("Couldn't read {}: {err}", path.display()));
-                self.results.clear();
-                return;
-            }
-        };
-        let drive_letter = crate::volume::drive_letter_of(&path);
-        let volume_label = crate::volume::volume_info(&drive_letter).label;
-        let root = format!("{drive_letter}\\");
-        let rel_path = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
-        let probe = IndexedFile {
-            volume_label,
-            drive_letter,
-            rel_path,
-            size: 0,
-            modified: std::time::SystemTime::UNIX_EPOCH,
-        };
-        let hash_hex = hex_encode(&hash);
-        self.results = self.db.matches(&hash_hex, &probe).into_iter().cloned().collect();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        std::thread::spawn(move || {
+            let event = match crate::scanner::full_hash(&path) {
+                Ok(hash) => {
+                    let drive_letter = crate::volume::drive_letter_of(&path);
+                    let volume_label = crate::volume::volume_info(&drive_letter).label;
+                    let root = format!("{drive_letter}\\");
+                    let rel_path = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+                    LookupEvent::Hashed {
+                        hash_hex: hex_encode(&hash),
+                        probe: IndexedFile {
+                            volume_label,
+                            drive_letter,
+                            rel_path,
+                            size: 0,
+                            modified: std::time::SystemTime::UNIX_EPOCH,
+                        },
+                    }
+                }
+                Err(err) => LookupEvent::Failed(format!("Couldn't read {}: {err}", path.display())),
+            };
+            let _ = tx.send(event);
+        });
+        self.lookup_rx = Some(rx);
     }
+
+    /// Applies finished lookup steps. Returns whether anything changed.
+    pub fn drain_lookup(&mut self) -> bool {
+        let Some(rx) = &self.lookup_rx else {
+            return false;
+        };
+        let Ok(event) = rx.try_recv() else {
+            return false;
+        };
+        match event {
+            LookupEvent::Failed(msg) => {
+                self.status = Some(msg);
+                self.lookup_rx = None;
+            }
+            LookupEvent::Hashed { hash_hex, probe } => {
+                self.results = self.db.matches(&hash_hex, &probe).into_iter().cloned().collect();
+                self.results_attached = vec![None; self.results.len()];
+                if self.results.is_empty() {
+                    self.lookup_rx = None;
+                } else {
+                    let files = self.results.clone();
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(LookupEvent::Attached(check_attached(&files)));
+                    });
+                    self.lookup_rx = Some(rx);
+                }
+            }
+            LookupEvent::Attached(attached) => {
+                self.results_attached = attached.into_iter().map(Some).collect();
+                self.lookup_rx = None;
+            }
+        }
+        true
+    }
+}
+
+/// Whether each file's volume is mounted under its recorded letter and the
+/// file is there. Not just `path.exists()`: a different physical drive can
+/// end up mounted under the same letter (e.g. swapping what's plugged into
+/// D:), and its files could coincidentally share a relative path with
+/// something indexed from the original volume. Volume labels are looked up
+/// once per letter.
+fn check_attached(files: &[IndexedFile]) -> Vec<bool> {
+    let mut labels: HashMap<String, String> = HashMap::new();
+    files
+        .iter()
+        .map(|f| {
+            let label = labels
+                .entry(f.drive_letter.clone())
+                .or_insert_with(|| crate::volume::volume_info(&f.drive_letter).label);
+            *label == f.volume_label && f.absolute_path().exists()
+        })
+        .collect()
 }

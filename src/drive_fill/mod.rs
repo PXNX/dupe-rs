@@ -154,6 +154,11 @@ pub struct DriveFillState {
     pub measure: MeasureState,
     pub copy: Option<CopyJob>,
     pub space: Option<DiskSpace>,
+    /// Names of the folders already in the target, read alongside `space`.
+    existing_in_target: HashSet<String>,
+    /// A background read of the target's free space and folder names, so a
+    /// sleeping or slow target drive never stalls the UI.
+    space_rx: Option<Receiver<(Option<DiskSpace>, HashSet<String>)>>,
     pub plan: FillPlan,
     pub status: Option<String>,
     /// Overview table sort; `None` keeps the default largest-first order.
@@ -171,6 +176,8 @@ impl Default for DriveFillState {
             measure: MeasureState::Idle,
             copy: None,
             space: None,
+            existing_in_target: HashSet::new(),
+            space_rx: None,
             plan: FillPlan::default(),
             status: None,
             sort: None,
@@ -189,6 +196,15 @@ impl DriveFillState {
 
     pub fn is_busy(&self) -> bool {
         self.is_measuring() || self.is_copying()
+    }
+
+    pub fn is_reading_target(&self) -> bool {
+        self.space_rx.is_some()
+    }
+
+    /// Whether `drain_events` has anything to wait for.
+    pub fn needs_polling(&self) -> bool {
+        self.is_busy() || self.is_reading_target()
     }
 
     /// Picks the folder whose subfolders get distributed, and starts sizing
@@ -231,10 +247,26 @@ impl DriveFillState {
         self.refresh_space();
     }
 
-    /// Re-reads the target's free space and rebuilds the plan around it.
+    /// Re-reads the target's free space and existing folders in the
+    /// background; the plan is rebuilt once they arrive.
     pub fn refresh_space(&mut self) {
-        self.space = self.target.as_deref().and_then(disk_space);
-        self.replan();
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let space = disk_space(&target);
+            let existing = std::fs::read_dir(&target)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = tx.send((space, existing));
+        });
+        self.space_rx = Some(rx);
     }
 
     pub fn set_excluded(&mut self, index: usize, excluded: bool) {
@@ -297,11 +329,7 @@ impl DriveFillState {
         for (i, folder) in self.folders.iter().enumerate() {
             if self.excluded.contains(&folder.path) {
                 statuses[i] = FolderStatus::Excluded;
-            } else if self
-                .target
-                .as_ref()
-                .is_some_and(|t| t.join(&folder.name).exists())
-            {
+            } else if self.existing_in_target.contains(&folder.name) {
                 statuses[i] = FolderStatus::ExistsInTarget;
             } else {
                 candidates.push(i);
@@ -367,6 +395,16 @@ impl DriveFillState {
     pub fn drain_events(&mut self, reverse_search: &mut ReverseSearchState) -> bool {
         let mut changed = false;
 
+        if let Some(rx) = &self.space_rx
+            && let Ok((space, existing)) = rx.try_recv()
+        {
+            self.space = space;
+            self.existing_in_target = existing;
+            self.space_rx = None;
+            self.replan();
+            changed = true;
+        }
+
         let mut measured = None;
         if let MeasureState::Running {
             rx, done, total, ..
@@ -403,14 +441,14 @@ impl DriveFillState {
                         job.entries.push((hash_hex, file));
                     }
                     CopyEvent::Error(msg) => job.errors.push(msg),
-                    CopyEvent::Done { aborted } => finished = Some(aborted),
+                    CopyEvent::Done { aborted, usage } => finished = Some((aborted, usage)),
                 }
             }
         }
-        if let Some(aborted) = finished
+        if let Some((aborted, usage)) = finished
             && let Some(job) = self.copy.take()
         {
-            self.finish_copy(job, aborted, reverse_search);
+            self.finish_copy(job, aborted, usage, reverse_search);
         }
         changed
     }
@@ -419,12 +457,13 @@ impl DriveFillState {
         &mut self,
         job: CopyJob,
         aborted: Option<String>,
+        usage: Option<(String, String, crate::index_db::VolumeUsage)>,
         reverse_search: &mut ReverseSearchState,
     ) {
         let cancelled = job.is_cancelled();
         let copied = job.files_copied;
         let errors = job.errors.len();
-        let indexed = reverse_search.add_to_index(job.entries);
+        let indexed = reverse_search.add_to_index(job.entries, usage);
 
         let mut msg = match (&aborted, cancelled) {
             (Some(reason), _) => format!("Stopped: {reason} Copied {copied} file(s)"),

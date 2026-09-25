@@ -1,6 +1,6 @@
 use super::{hash, walk};
 use crate::config::ScanConfig;
-use crate::index_db::{IndexedFile, hex_encode};
+use crate::index_db::{IndexedFile, VolumeUsage, hex_encode};
 use crate::model::ScanEvent;
 use crate::volume;
 use crossbeam_channel::Sender;
@@ -16,6 +16,8 @@ pub enum IndexEvent {
     Done {
         entries: Vec<(String, IndexedFile)>,
         elapsed_ms: u128,
+        /// How full each indexed drive is, measured at the end of the pass.
+        usage: Vec<(String, String, VolumeUsage)>,
     },
 }
 
@@ -38,6 +40,7 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<J
         let _ = tx.send(IndexEvent::Done {
             entries: Vec::new(),
             elapsed_ms: start.elapsed().as_millis(),
+            usage: Vec::new(),
         });
         return;
     }
@@ -89,8 +92,26 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<J
         })
         .collect();
 
+    let usage = volumes
+        .iter()
+        .filter_map(|(drive, vol)| Some((drive.clone(), vol.label.clone(), volume_usage(drive)?)))
+        .collect();
     let _ = tx.send(IndexEvent::Done {
         entries,
         elapsed_ms: start.elapsed().as_millis(),
+        usage,
     });
+}
+
+/// Current total/free space of `drive_letter` (e.g. `"D:"`), if queryable.
+pub fn volume_usage(drive_letter: &str) -> Option<VolumeUsage> {
+    if drive_letter.is_empty() {
+        return None;
+    }
+    let space = volume::disk_space(std::path::Path::new(&format!("{drive_letter}\\")))?;
+    Some(VolumeUsage {
+        total: space.total,
+        free: space.free,
+        recorded_at: std::time::SystemTime::now(),
+    })
 }

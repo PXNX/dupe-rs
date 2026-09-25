@@ -173,7 +173,14 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
     ui.add_space(4.0);
 
     if app.reverse_search.results.is_empty() {
-        ui.label("No matches found in the index.");
+        if app.reverse_search.is_looking_up() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Hashing the file and looking it up...");
+            });
+        } else {
+            ui.label("No matches found in the index.");
+        }
         return;
     }
 
@@ -201,29 +208,30 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
         })
         .body(|mut body| {
             let results = app.reverse_search.results.clone();
-            for file in &results {
+            for (i, file) in results.iter().enumerate() {
+                let attached = app.reverse_search.results_attached.get(i).copied().flatten();
                 body.row(22.0, |mut row| {
                     row.col(|ui| {
                         ui.label(format!("{} ({})", file.volume_label, file.drive_letter));
                     });
                     row.col(|ui| {
-                        // Not just `path.exists()`: a different physical
-                        // drive can end up mounted under the same letter
-                        // (e.g. swapping what's plugged into D:), and its
-                        // files could coincidentally share a relative path
-                        // with something indexed from the original volume.
-                        let attached = crate::volume::volume_info(&file.drive_letter).label
-                            == file.volume_label
-                            && file.absolute_path().exists();
-                        let text = if attached {
-                            RichText::new(file.rel_path.display().to_string())
-                        } else {
-                            RichText::new(format!(
+                        // Checked once in the background (see
+                        // `reverse_search::check_attached`), never per frame:
+                        // probing a sleeping drive can block for seconds.
+                        let text = match attached {
+                            Some(true) => RichText::new(file.rel_path.display().to_string()),
+                            Some(false) => RichText::new(format!(
                                 "{} (drive not attached)",
                                 file.rel_path.display()
                             ))
-                            .color(Color32::from_gray(140))
+                            .color(Color32::from_gray(140)),
+                            None => RichText::new(format!(
+                                "{} (checking drive...)",
+                                file.rel_path.display()
+                            ))
+                            .color(Color32::from_gray(140)),
                         };
+                        let attached = attached == Some(true);
                         let response = ui.add(egui::Label::new(text).sense(Sense::click()));
                         let response = if attached {
                             response.on_hover_text("Double-click to open")

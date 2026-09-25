@@ -1,5 +1,5 @@
 use crate::control::JobControl;
-use crate::index_db::{IndexedFile, hex_encode};
+use crate::index_db::{IndexedFile, VolumeUsage, hex_encode};
 use crate::volume;
 use crossbeam_channel::Sender;
 use std::fs::{File, OpenOptions};
@@ -30,6 +30,9 @@ pub enum CopyEvent {
     /// cancelling (e.g. the target filled up).
     Done {
         aborted: Option<String>,
+        /// The target volume's usage afterwards, measured here rather than
+        /// on the UI thread (a sleeping drive can take seconds to answer).
+        usage: Option<(String, String, VolumeUsage)>,
     },
 }
 
@@ -43,14 +46,28 @@ pub fn copy_folders(jobs: Vec<(PathBuf, PathBuf)>, tx: Sender<CopyEvent>, contro
     let volume = jobs
         .first()
         .map(|(_, dest)| volume::volume_info(&volume::drive_letter_of(dest)));
+    let aborted = copy_all(jobs, &tx, control, volume.as_ref());
+    let usage = volume.and_then(|vol| {
+        let usage = crate::scanner::indexer::volume_usage(&vol.drive_letter)?;
+        Some((vol.drive_letter, vol.label, usage))
+    });
+    let _ = tx.send(CopyEvent::Done { aborted, usage });
+}
+
+/// The copy loop; returns why it stopped early, if it wasn't cancelled.
+fn copy_all(
+    jobs: Vec<(PathBuf, PathBuf)>,
+    tx: &Sender<CopyEvent>,
+    control: &JobControl,
+    volume: Option<&volume::VolumeInfo>,
+) -> Option<String> {
     let mut bytes_done = 0u64;
     let mut last_reported = 0u64;
 
     for (source, dest) in jobs {
         for entry in WalkDir::new(&source).follow_links(false) {
             if control.checkpoint() {
-                let _ = tx.send(CopyEvent::Done { aborted: None });
-                return;
+                return None;
             }
             let entry = match entry {
                 Ok(e) => e,
@@ -88,7 +105,7 @@ pub fn copy_folders(jobs: Vec<(PathBuf, PathBuf)>, tx: Sender<CopyEvent>, contro
             match result {
                 Ok(Some((hash, size, modified))) => {
                     let _ = tx.send(CopyEvent::Progress { bytes_done });
-                    if let Some(vol) = &volume {
+                    if let Some(vol) = volume {
                         let root = format!("{}\\", vol.drive_letter);
                         let _ = tx.send(CopyEvent::FileCopied {
                             hash_hex: hex_encode(&hash),
@@ -107,17 +124,13 @@ pub fn copy_folders(jobs: Vec<(PathBuf, PathBuf)>, tx: Sender<CopyEvent>, contro
                 }
                 // Cancelled mid-file.
                 Ok(None) => {
-                    let _ = tx.send(CopyEvent::Done { aborted: None });
-                    return;
+                    return None;
                 }
                 Err(err) if err.kind() == io::ErrorKind::StorageFull => {
-                    let _ = tx.send(CopyEvent::Done {
-                        aborted: Some(format!(
+                    return Some(format!(
                             "The target ran out of space while copying {}.",
                             entry.path().display()
-                        )),
-                    });
-                    return;
+                        ));
                 }
                 Err(err) => {
                     let _ = tx.send(CopyEvent::Error(format!(
@@ -128,7 +141,7 @@ pub fn copy_folders(jobs: Vec<(PathBuf, PathBuf)>, tx: Sender<CopyEvent>, contro
             }
         }
     }
-    let _ = tx.send(CopyEvent::Done { aborted: None });
+    None
 }
 
 /// Copies `src` to a new file at `dst` (never overwriting), returning its
@@ -208,7 +221,7 @@ mod tests {
 
         assert!(matches!(
             events.last(),
-            Some(CopyEvent::Done { aborted: None })
+            Some(CopyEvent::Done { aborted: None, .. })
         ));
         assert!(dst.path().join("album/empty").is_dir());
         let copied = dst.path().join("album/disc1/01.flac");
