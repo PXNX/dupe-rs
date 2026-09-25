@@ -45,9 +45,36 @@ jobs:
           name: dupe-rs-windows
           path: dist/dupe-rs.exe
 
+      # A push to master publishes `v<Cargo.toml version>` the first time that
+      # version is seen, so bumping `version` in Cargo.toml is all a release
+      # takes. Pushing a `v*.*.*` tag by hand still works too.
+      - name: Decide release tag
+        id: release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ("${{ github.ref }}".StartsWith("refs/tags/v")) {
+            $tag = "${{ github.ref_name }}"
+          } else {
+            $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+              Select-Object -First 1).Matches[0].Groups[1].Value
+            $tag = "v$version"
+            gh release view $tag --repo "${{ github.repository }}" *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Release $tag already exists; bump the version in Cargo.toml to publish a new one."
+              $tag = ""
+            }
+            $global:LASTEXITCODE = 0
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.release.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/dupe-rs.exe
           generate_release_notes: true
