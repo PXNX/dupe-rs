@@ -28,6 +28,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 AppTab::Reencode,
                 format!("{} Re-encode", icons::ICON_COMPRESS.codepoint),
             );
+            ui.selectable_value(
+                &mut app.tab,
+                AppTab::Flatten,
+                format!("{} Flatten", icons::ICON_DRIVE_FILE_MOVE.codepoint),
+            );
         });
         ui.add_space(2.0);
     });

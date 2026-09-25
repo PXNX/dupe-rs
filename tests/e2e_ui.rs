@@ -562,3 +562,39 @@ fn picker_results_land_where_they_were_requested() {
     app.apply_pick(PickPurpose::FillSource, Vec::new());
     assert!(app.drive_fill.source.is_none());
 }
+
+#[test]
+fn flatten_tab_previews_then_moves_files_up_with_renames() {
+    use dupe_rs::ui::dialogs::PickPurpose;
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("x/y")).unwrap();
+    fs::write(dir.path().join("x/song.mp3"), b"1").unwrap();
+    fs::write(dir.path().join("x/y/song.mp3"), b"2").unwrap();
+
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label_contains("Flatten").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::Flatten);
+
+    harness.state_mut().apply_pick(PickPurpose::FlattenRoot, vec![dir.path().to_path_buf()]);
+    let wait = |harness: &mut Harness<'static, DupeApp>| {
+        let start = Instant::now();
+        while harness.state().flatten.needs_polling() {
+            harness.step();
+            assert!(start.elapsed() < Duration::from_secs(10), "flatten timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        harness.run();
+    };
+    wait(&mut harness);
+    assert!(harness.query_by_label_contains("song (2).mp3 (renamed)").is_some());
+
+    harness.get_by_label_contains("Move 2 file(s)").click();
+    harness.step();
+    wait(&mut harness);
+    assert_eq!(fs::read(dir.path().join("song.mp3")).unwrap(), b"1");
+    assert_eq!(fs::read(dir.path().join("song (2).mp3")).unwrap(), b"2");
+    assert!(!dir.path().join("x").exists());
+    assert!(harness.query_by_label_contains("Undo last run").is_some());
+}

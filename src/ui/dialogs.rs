@@ -10,6 +10,7 @@ pub enum PickPurpose {
     FillSource,
     FillTarget,
     ReencodeFolders,
+    FlattenRoot,
 }
 
 impl PickPurpose {
@@ -19,7 +20,7 @@ impl PickPurpose {
             PickPurpose::ScanFolders | PickPurpose::IndexFolders | PickPurpose::ReencodeFolders => {
                 dialog.pick_folders().unwrap_or_default()
             }
-            PickPurpose::FillSource | PickPurpose::FillTarget => {
+            PickPurpose::FillSource | PickPurpose::FillTarget | PickPurpose::FlattenRoot => {
                 dialog.pick_folder().into_iter().collect()
             }
             PickPurpose::SearchFile => dialog.pick_file().into_iter().collect(),

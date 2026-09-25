@@ -36,6 +36,9 @@ assets/screenshot.png.
   choosing the combination that fills its free space as completely as possible. Copied
   files are hashed on the way and added to the reverse-search index, so you can later
   look up which drive a file ended up on.
+- **Flatten** — move every file out of a folder's subfolders into the folder itself,
+  renaming name clashes Windows-style (`name (2).ext`) and keeping split-archive sets
+  consistent, with a preview first and one-step undo.
 - **Re-encode** — shrink PNG/BMP/TIFF/... images losslessly (lossless WebP or
   max-compression PNG, verified pixel for pixel), and with ffmpeg on `PATH` re-encode
   lossless-codec videos to FFV1, or optionally everything to visually lossless H.265.

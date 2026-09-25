@@ -3,6 +3,7 @@ pub mod archive;
 pub mod config;
 pub mod control;
 pub mod drive_fill;
+pub mod flatten;
 pub mod index_db;
 pub mod model;
 pub mod namematch;

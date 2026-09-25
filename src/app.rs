@@ -1,6 +1,7 @@
 use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_extension_list};
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::drive_fill::DriveFillState;
+use crate::flatten::FlattenState;
 use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
 use crate::reencode::ReencodeState;
 use crate::reverse_search::ReverseSearchState;
@@ -124,6 +125,7 @@ pub enum AppTab {
     ReverseSearch,
     DriveFill,
     Reencode,
+    Flatten,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +179,7 @@ pub enum ConfirmAction {
     CancelDelete(u64),
     CancelCopy,
     CancelReencode,
+    CancelFlatten,
     CloseWindow,
 }
 
@@ -284,6 +287,7 @@ pub struct DupeApp {
     pub reverse_search: ReverseSearchState,
     pub drive_fill: DriveFillState,
     pub reencode: ReencodeState,
+    pub flatten: FlattenState,
 
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
@@ -328,6 +332,7 @@ impl Default for DupeApp {
             reverse_search: ReverseSearchState::default(),
             drive_fill: DriveFillState::default(),
             reencode: ReencodeState::default(),
+            flatten: FlattenState::default(),
 
             taskbar: Taskbar::default(),
             play_sounds: true,
@@ -727,6 +732,11 @@ impl DupeApp {
                     self.drive_fill.set_target(p);
                 }
             }
+            PickPurpose::FlattenRoot => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.flatten.set_root(p);
+                }
+            }
         }
     }
 
@@ -749,6 +759,9 @@ impl DupeApp {
         }
         if self.reencode.is_running() {
             running.push("re-encoding");
+        }
+        if self.flatten.is_running() {
+            running.push("moving files (flatten)");
         }
         running
     }
@@ -779,6 +792,11 @@ impl DupeApp {
                     job.cancel();
                 }
             }
+            ConfirmAction::CancelFlatten => {
+                if let Some(job) = &mut self.flatten.job {
+                    job.cancel();
+                }
+            }
             ConfirmAction::CloseWindow => {
                 // Ask every worker to stop so it can clean up (e.g. remove a
                 // half-written file) in the moment before the process exits.
@@ -792,6 +810,9 @@ impl DupeApp {
                     job.cancel();
                 }
                 if let Some(job) = &mut self.reencode.job {
+                    job.cancel();
+                }
+                if let Some(job) = &mut self.flatten.job {
                     job.cancel();
                 }
                 self.allow_close = true;
@@ -815,6 +836,13 @@ impl DupeApp {
                 TaskbarProgress::Indeterminate
             } else {
                 TaskbarProgress::Normal(fraction)
+            };
+        }
+        if let Some(job) = &self.flatten.job {
+            return if job.is_paused() {
+                TaskbarProgress::Paused(job.fraction())
+            } else {
+                TaskbarProgress::Normal(job.fraction())
             };
         }
         if let Some(job) = &self.reencode.job {
@@ -931,6 +959,15 @@ impl eframe::App for DupeApp {
             }
         }
 
+        if self.flatten.needs_polling() {
+            if self.flatten.drain_events() {
+                ctx.request_repaint();
+            }
+            if self.flatten.needs_polling() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
         if self.reencode.is_running() {
             let changed = self.reencode.drain_events();
             if changed {
@@ -988,6 +1025,7 @@ impl eframe::App for DupeApp {
             egui::CentralPanel::default().show(ui, |ui| match self.tab {
                 AppTab::DriveFill => crate::ui::drive_fill_panel::show(self, ui),
                 AppTab::Reencode => crate::ui::reencode_panel::show(self, ui),
+                AppTab::Flatten => crate::ui::flatten_panel::show(self, ui),
                 _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }

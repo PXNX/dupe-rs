@@ -73,6 +73,13 @@ fn describe(app: &DupeApp, action: ConfirmAction) -> (&'static str, String, &'st
                 .into(),
             "Cancel re-encoding",
         ),
+        ConfirmAction::CancelFlatten => (
+            "Stop moving files?",
+            "Files already moved stay where they are now (and can still be undone); the \
+             rest stay in their subfolders."
+                .into(),
+            "Stop moving",
+        ),
         ConfirmAction::CloseWindow => {
             let running = app.running_work();
             let message = if running.is_empty() {
