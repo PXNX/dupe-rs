@@ -6,6 +6,7 @@ pub mod namematch;
 pub mod reverse_search;
 pub mod scanner;
 pub mod selection;
+pub mod sound;
 pub mod stats;
 pub mod taskbar;
 pub mod ui;

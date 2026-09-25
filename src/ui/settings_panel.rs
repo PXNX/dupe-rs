@@ -35,6 +35,13 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 {
                     app.status_message = Some(format!("Couldn't open GitHub page: {err}"));
                 }
+                let sound_icon = if app.play_sounds {
+                    icons::ICON_VOLUME_UP
+                } else {
+                    icons::ICON_VOLUME_OFF
+                };
+                ui.toggle_value(&mut app.play_sounds, sound_icon.codepoint)
+                    .on_hover_text("Play a sound when a scan or delete finishes");
             });
         });
         ui.add_space(4.0);

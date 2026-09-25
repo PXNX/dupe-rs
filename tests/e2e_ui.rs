@@ -17,7 +17,11 @@ use tempfile::tempdir;
 fn harness() -> Harness<'static, DupeApp> {
     Harness::builder().build_eframe(|cc| {
         egui_material_icons::initialize(&cc.egui_ctx);
-        DupeApp::default()
+        DupeApp {
+            // Keep test runs quiet.
+            play_sounds: false,
+            ..DupeApp::default()
+        }
     })
 }
 

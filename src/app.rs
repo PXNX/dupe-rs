@@ -3,6 +3,7 @@ use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, Sim
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
 use crate::selection::{compute_visible_entries, compute_visible_media_entries};
+use crate::sound::{self, Sound};
 use crate::taskbar::{Taskbar, TaskbarProgress};
 use crate::ui::thumbnails::ThumbnailCache;
 use crate::view_cache::ExactRowsCache;
@@ -252,6 +253,8 @@ pub struct DupeApp {
     pub reverse_search: ReverseSearchState,
 
     pub taskbar: Taskbar,
+    /// Whether to play a chime when a scan or delete finishes.
+    pub play_sounds: bool,
 }
 
 impl Default for DupeApp {
@@ -285,6 +288,7 @@ impl Default for DupeApp {
             reverse_search: ReverseSearchState::default(),
 
             taskbar: Taskbar::default(),
+            play_sounds: true,
         }
     }
 }
@@ -341,11 +345,12 @@ impl DupeApp {
         let mut changed = false;
         let mut groups_changed = false;
         let mut new_state = None;
+        let mut cancelled = false;
         if let ScanState::Running {
             rx,
+            cancel,
             scanned,
             hash_progress,
-            ..
         } = &mut self.scan_state
         {
             for event in rx.try_iter().take(200) {
@@ -370,6 +375,7 @@ impl DupeApp {
                     }
                     ScanEvent::SimilarGroupFound(group) => self.similar_groups.push(group),
                     ScanEvent::Done { elapsed_ms } => {
+                        cancelled = cancel.load(Ordering::Relaxed);
                         new_state = Some(ScanState::Done { elapsed_ms })
                     }
                     ScanEvent::Error(msg) => self.status_message = Some(msg),
@@ -381,6 +387,9 @@ impl DupeApp {
         }
         if let Some(state) = new_state {
             self.scan_state = state;
+            if self.play_sounds && !cancelled {
+                sound::play(Sound::ScanFinished);
+            }
         }
         changed
     }
@@ -543,6 +552,10 @@ impl DupeApp {
             }
             self.similar_groups.retain(|g| g.files.len() > 1);
             self.selection.retain(|p| !deleted_paths.contains(p));
+
+            if self.play_sounds {
+                sound::play(Sound::DeleteFinished);
+            }
 
             let action = if permanent {
                 "Permanently deleted"
