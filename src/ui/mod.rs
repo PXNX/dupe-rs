@@ -6,6 +6,7 @@ pub mod disk_usage_panel;
 pub mod drive_fill_panel;
 pub mod flatten_panel;
 pub mod format;
+pub mod metadata_backup_panel;
 pub mod reencode_panel;
 pub mod results_grid;
 pub mod results_table;

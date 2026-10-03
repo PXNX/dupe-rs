@@ -1,5 +1,5 @@
 mod group;
-mod hash;
+pub mod hash;
 pub mod indexer;
 mod similarity;
 mod walk;

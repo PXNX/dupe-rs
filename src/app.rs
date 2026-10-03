@@ -3,6 +3,7 @@ use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::disk_usage::DiskUsageState;
 use crate::drive_fill::DriveFillState;
 use crate::flatten::FlattenState;
+use crate::metadata_backup::MetadataBackupState;
 use crate::model::{
     CacheDir, DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup,
 };
@@ -132,6 +133,7 @@ pub enum AppTab {
     Reencode,
     Flatten,
     DiskUsage,
+    MetadataBackup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +199,7 @@ pub enum ConfirmAction {
     CancelCopy,
     CancelReencode,
     CancelFlatten,
+    CancelMetadataBackup,
     CloseWindow,
 }
 
@@ -324,6 +327,7 @@ pub struct DupeApp {
     pub reencode: ReencodeState,
     pub flatten: FlattenState,
     pub disk_usage: DiskUsageState,
+    pub metadata_backup: MetadataBackupState,
 
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
@@ -378,6 +382,7 @@ impl Default for DupeApp {
             reencode: ReencodeState::default(),
             flatten: FlattenState::default(),
             disk_usage: DiskUsageState::default(),
+            metadata_backup: MetadataBackupState::default(),
 
             taskbar: Taskbar::default(),
             play_sounds: true,
@@ -897,6 +902,16 @@ impl DupeApp {
                     self.disk_usage.set_root(p);
                 }
             }
+            PickPurpose::MetadataBackupRoot => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.metadata_backup.set_root(p);
+                }
+            }
+            PickPurpose::MetadataBackupFile => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.metadata_backup.select_backup(p);
+                }
+            }
         }
     }
 
@@ -925,6 +940,9 @@ impl DupeApp {
         }
         if self.disk_usage.is_scanning() {
             running.push("measuring disk usage");
+        }
+        if self.metadata_backup.is_running() {
+            running.push("a metadata backup or restore");
         }
         running
     }
@@ -964,6 +982,11 @@ impl DupeApp {
                     job.cancel();
                 }
             }
+            ConfirmAction::CancelMetadataBackup => {
+                if let Some(job) = &mut self.metadata_backup.job {
+                    job.cancel();
+                }
+            }
             ConfirmAction::CloseWindow => {
                 // Ask every worker to stop so it can clean up (e.g. remove a
                 // half-written file) in the moment before the process exits.
@@ -980,6 +1003,9 @@ impl DupeApp {
                     job.cancel();
                 }
                 if let Some(job) = &mut self.flatten.job {
+                    job.cancel();
+                }
+                if let Some(job) = &mut self.metadata_backup.job {
                     job.cancel();
                 }
                 self.allow_close = true;
@@ -1144,6 +1170,15 @@ impl eframe::App for DupeApp {
             }
         }
 
+        if self.metadata_backup.is_running() {
+            if self.metadata_backup.drain_events() {
+                ctx.request_repaint();
+            }
+            if self.metadata_backup.is_running() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
         if self.reencode.is_running() {
             let changed = self.reencode.drain_events();
             if changed {
@@ -1205,6 +1240,7 @@ impl eframe::App for DupeApp {
                 AppTab::Reencode => crate::ui::reencode_panel::show(self, ui),
                 AppTab::Flatten => crate::ui::flatten_panel::show(self, ui),
                 AppTab::DiskUsage => crate::ui::disk_usage_panel::show(self, ui),
+                AppTab::MetadataBackup => crate::ui::metadata_backup_panel::show(self, ui),
                 _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }

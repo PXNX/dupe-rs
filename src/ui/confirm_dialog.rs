@@ -80,6 +80,13 @@ fn describe(app: &DupeApp, action: ConfirmAction) -> (&'static str, String, &'st
                 .into(),
             "Stop moving",
         ),
+        ConfirmAction::CancelMetadataBackup => (
+            "Stop?",
+            "No backup is saved for a cancelled backup. A cancelled restore keeps what it \
+             already put back; the backup of the state before restoring stays saved."
+                .into(),
+            "Stop",
+        ),
         ConfirmAction::CloseWindow => {
             let running = app.running_work();
             let message = if running.is_empty() {

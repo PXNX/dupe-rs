@@ -12,6 +12,8 @@ pub enum PickPurpose {
     ReencodeFolders,
     FlattenRoot,
     DiskUsageRoot,
+    MetadataBackupRoot,
+    MetadataBackupFile,
 }
 
 impl PickPurpose {
@@ -24,8 +26,15 @@ impl PickPurpose {
             PickPurpose::FillSource
             | PickPurpose::FillTarget
             | PickPurpose::FlattenRoot
-            | PickPurpose::DiskUsageRoot => dialog.pick_folder().into_iter().collect(),
+            | PickPurpose::DiskUsageRoot
+            | PickPurpose::MetadataBackupRoot => dialog.pick_folder().into_iter().collect(),
             PickPurpose::SearchFile => dialog.pick_file().into_iter().collect(),
+            PickPurpose::MetadataBackupFile => dialog
+                .add_filter("Metadata backup", &["json"])
+                .set_directory(crate::metadata_backup::default_backups_dir())
+                .pick_file()
+                .into_iter()
+                .collect(),
         }
     }
 }

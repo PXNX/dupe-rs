@@ -38,6 +38,14 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 AppTab::DiskUsage,
                 format!("{} Disk Usage", icons::ICON_PIE_CHART.codepoint),
             );
+            ui.selectable_value(
+                &mut app.tab,
+                AppTab::MetadataBackup,
+                format!(
+                    "{} Metadata Backup",
+                    icons::ICON_SETTINGS_BACKUP_RESTORE.codepoint
+                ),
+            );
         });
         ui.add_space(2.0);
     });
