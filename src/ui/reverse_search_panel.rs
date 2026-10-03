@@ -1,5 +1,5 @@
 use crate::app::DupeApp;
-use crate::reverse_search::IndexState;
+use crate::reverse_search::{IndexState, Presence};
 use crate::ui::format::format_timestamp;
 use egui::{Color32, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
@@ -102,40 +102,23 @@ fn show_index_section(app: &mut DupeApp, ui: &mut Ui) {
             }
         });
 
-        let drives = app.reverse_search.db.indexed_drives();
-        if drives.is_empty() {
+        let volumes = app.reverse_search.db.volumes();
+        if volumes.is_empty() {
             ui.label("No drives indexed yet.");
         } else {
-            ui.label(format!(
-                "Indexed {} drive(s), {} file(s) total:",
-                drives.len(),
-                app.reverse_search.db.total_files()
-            ));
-            for (letter, label) in &drives {
-                ui.horizontal(|ui| {
-                    ui.label(icons::ICON_HARD_DRIVE.rich_text());
-                    ui.label(format!("{label} ({letter})"));
-                    match app.reverse_search.db.usage(letter, label) {
-                        Some(usage) => {
-                            ui.add(
-                                egui::ProgressBar::new(usage.used_fraction())
-                                    .desired_width(160.0)
-                                    .text(format!("{:.0}% used", usage.used_fraction() * 100.0)),
-                            );
-                            ui.label(format!(
-                                "{} of {} used, {} free",
-                                format_size(usage.used(), DECIMAL),
-                                format_size(usage.total, DECIMAL),
-                                format_size(usage.free, DECIMAL),
-                            ));
-                            ui.weak(format!("as of {}", format_timestamp(usage.recorded_at)));
-                        }
-                        None => {
-                            ui.weak("usage not recorded yet (re-index to capture it)");
-                        }
-                    }
-                });
-            }
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "Indexed {} drive(s), {} file(s) total.",
+                    volumes.len(),
+                    app.reverse_search.db.total_files()
+                ));
+                if ui
+                    .link(format!("{} See them in the Drives tab", icons::ICON_HARD_DRIVE.codepoint))
+                    .clicked()
+                {
+                    app.tab = crate::app::AppTab::Drives;
+                }
+            });
         }
 
         if let Some(status) = &app.reverse_search.status {
@@ -203,7 +186,12 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
         .body(|mut body| {
             let results = app.reverse_search.results.clone();
             for (i, file) in results.iter().enumerate() {
-                let attached = app.reverse_search.results_attached.get(i).copied().flatten();
+                let presence = app
+                    .reverse_search
+                    .results_presence
+                    .get(i)
+                    .cloned()
+                    .unwrap_or(Presence::Checking);
                 body.row(22.0, |mut row| {
                     row.col(|ui| {
                         ui.label(format!("{} ({})", file.volume_label, file.drive_letter));
@@ -212,28 +200,24 @@ fn show_search_section(app: &mut DupeApp, ui: &mut Ui) {
                         // Checked once in the background (see
                         // `reverse_search::check_attached`), never per frame:
                         // probing a sleeping drive can block for seconds.
-                        let text = match attached {
-                            Some(true) => RichText::new(file.rel_path.display().to_string()),
-                            Some(false) => RichText::new(format!(
+                        let text = match &presence {
+                            Presence::At(path) => RichText::new(path.display().to_string()),
+                            Presence::Missing => RichText::new(format!(
                                 "{} (drive not attached)",
                                 file.rel_path.display()
                             ))
                             .color(Color32::from_gray(140)),
-                            None => RichText::new(format!(
+                            Presence::Checking => RichText::new(format!(
                                 "{} (checking drive...)",
                                 file.rel_path.display()
                             ))
                             .color(Color32::from_gray(140)),
                         };
-                        let attached = attached == Some(true);
                         let response = ui.add(egui::Label::new(text).sense(Sense::click()));
-                        let response = if attached {
-                            response.on_hover_text("Double-click to open")
-                        } else {
-                            response
-                        };
-                        if attached && response.double_clicked() {
-                            open_path = Some(file.absolute_path());
+                        if let Presence::At(path) = presence
+                            && response.on_hover_text("Double-click to open").double_clicked()
+                        {
+                            open_path = Some(path);
                         }
                     });
                     row.col(|ui| {

@@ -85,9 +85,14 @@ fn fills_the_target_with_the_best_fitting_folders_and_indexes_them() {
     );
     assert!(target.path().join("mid/data.bin").exists());
     assert_eq!(reverse_search.db.total_files(), 3);
+    // The target's fill level is handed on for the drive list.
     let drive = dupe_rs::volume::drive_letter_of(target.path());
-    let label = dupe_rs::volume::volume_info(&drive).label;
-    assert!(reverse_search.db.usage(&drive, &label).is_some());
+    let updates = reverse_search.take_drive_updates();
+    assert!(
+        updates
+            .iter()
+            .any(|u| u.volume.drive_letter == drive && u.usage.is_some() && !u.indexed)
+    );
 
     // Once copied, those folders show up as already present in the target.
     assert_eq!(status_of(&state, "mid"), FolderStatus::ExistsInTarget);

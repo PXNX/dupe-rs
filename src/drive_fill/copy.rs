@@ -32,7 +32,7 @@ pub enum CopyEvent {
         aborted: Option<String>,
         /// The target volume's usage afterwards, measured here rather than
         /// on the UI thread (a sleeping drive can take seconds to answer).
-        usage: Option<(String, String, VolumeUsage)>,
+        usage: Option<(volume::VolumeInfo, VolumeUsage)>,
     },
 }
 
@@ -49,7 +49,7 @@ pub fn copy_folders(jobs: Vec<(PathBuf, PathBuf)>, tx: Sender<CopyEvent>, contro
     let aborted = copy_all(jobs, &tx, control, volume.as_ref());
     let usage = volume.and_then(|vol| {
         let usage = crate::scanner::indexer::volume_usage(&vol.drive_letter)?;
-        Some((vol.drive_letter, vol.label, usage))
+        Some((vol, usage))
     });
     let _ = tx.send(CopyEvent::Done { aborted, usage });
 }
@@ -112,6 +112,7 @@ fn copy_all(
                             file: IndexedFile {
                                 volume_label: vol.label.clone(),
                                 drive_letter: vol.drive_letter.clone(),
+                                volume_serial: vol.serial,
                                 rel_path: target
                                     .strip_prefix(&root)
                                     .unwrap_or(&target)

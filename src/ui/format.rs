@@ -6,6 +6,19 @@ pub fn format_timestamp(t: SystemTime) -> String {
     dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
+/// How long ago `t` was, coarsely: "today", "yesterday", "12 days ago",
+/// "3 months ago", "2 years ago".
+pub fn format_ago(t: SystemTime, now: SystemTime) -> String {
+    let days = now.duration_since(t).map_or(0, |d| d.as_secs() / 86_400);
+    match days {
+        0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        2..=59 => format!("{days} days ago"),
+        60..=729 => format!("{} months ago", days / 30),
+        _ => format!("{} years ago", days / 365),
+    }
+}
+
 pub fn hex_prefix(hash: &[u8; 32]) -> String {
     hash[..8].iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -7,6 +7,10 @@ use dupe_rs::app::DupeApp;
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
 fn main() -> eframe::Result<()> {
+    // Started elevated by a drive health check: read SMART and exit.
+    if let Some(code) = dupe_rs::smart::run_helper_from_args() {
+        std::process::exit(code);
+    }
     let icon = eframe::icon_data::from_png_bytes(ICON_PNG).expect("bundled icon.png is valid");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

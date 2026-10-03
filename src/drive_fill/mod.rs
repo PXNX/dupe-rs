@@ -457,7 +457,7 @@ impl DriveFillState {
         &mut self,
         job: CopyJob,
         aborted: Option<String>,
-        usage: Option<(String, String, crate::index_db::VolumeUsage)>,
+        usage: Option<(crate::volume::VolumeInfo, crate::index_db::VolumeUsage)>,
         reverse_search: &mut ReverseSearchState,
     ) {
         let cancelled = job.is_cancelled();

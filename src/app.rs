@@ -2,6 +2,7 @@ use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_exten
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::disk_usage::DiskUsageState;
 use crate::drive_fill::DriveFillState;
+use crate::drives::{DriveRegistry, DrivesState};
 use crate::flatten::FlattenState;
 use crate::model::{
     CacheDir, DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup,
@@ -128,6 +129,7 @@ pub enum ViewMode {
 pub enum AppTab {
     Scan,
     ReverseSearch,
+    Drives,
     DriveFill,
     Reencode,
     Flatten,
@@ -320,6 +322,7 @@ pub struct DupeApp {
 
     pub tab: AppTab,
     pub reverse_search: ReverseSearchState,
+    pub drives: DrivesState,
     pub drive_fill: DriveFillState,
     pub reencode: ReencodeState,
     pub flatten: FlattenState,
@@ -338,6 +341,8 @@ pub struct DupeApp {
 
 impl Default for DupeApp {
     fn default() -> Self {
+        let mut reverse_search = ReverseSearchState::default();
+        let drives = DrivesState::new(DriveRegistry::default_path(), &mut reverse_search.db);
         Self {
             config: ScanConfig::default(),
             only_show_duplicates: false,
@@ -373,7 +378,8 @@ impl Default for DupeApp {
             next_delete_job_id: 0,
 
             tab: AppTab::Scan,
-            reverse_search: ReverseSearchState::default(),
+            reverse_search,
+            drives,
             drive_fill: DriveFillState::default(),
             reencode: ReencodeState::default(),
             flatten: FlattenState::default(),
@@ -1126,6 +1132,16 @@ impl eframe::App for DupeApp {
             }
         }
 
+        // After indexing and drive-fill, so what they learned about drives
+        // is picked up in the same frame.
+        self.drives.ensure_watching(&ctx);
+        if self.drives.poll(&mut self.reverse_search) {
+            ctx.request_repaint();
+        }
+        if self.drives.is_checking_health() {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+
         if self.flatten.needs_polling() {
             if self.flatten.drain_events() {
                 ctx.request_repaint();
@@ -1205,6 +1221,7 @@ impl eframe::App for DupeApp {
                 AppTab::Reencode => crate::ui::reencode_panel::show(self, ui),
                 AppTab::Flatten => crate::ui::flatten_panel::show(self, ui),
                 AppTab::DiskUsage => crate::ui::disk_usage_panel::show(self, ui),
+                AppTab::Drives => crate::ui::drives_panel::show(self, ui),
                 _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }

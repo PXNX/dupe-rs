@@ -20,6 +20,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
             );
             ui.selectable_value(
                 &mut app.tab,
+                AppTab::Drives,
+                format!("{} Drives", icons::ICON_STORAGE.codepoint),
+            );
+            ui.selectable_value(
+                &mut app.tab,
                 AppTab::DriveFill,
                 format!("{} Drive Fill", icons::ICON_HARD_DRIVE.codepoint),
             );

@@ -2,7 +2,7 @@ use super::{hash, walk};
 use crate::config::ScanConfig;
 use crate::index_db::{IndexedFile, VolumeUsage, hex_encode};
 use crate::model::ScanEvent;
-use crate::volume;
+use crate::volume::{self, VolumeInfo};
 use crossbeam_channel::Sender;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ pub enum IndexEvent {
         entries: Vec<(String, IndexedFile)>,
         elapsed_ms: u128,
         /// How full each indexed drive is, measured at the end of the pass.
-        usage: Vec<(String, String, VolumeUsage)>,
+        usage: Vec<(VolumeInfo, VolumeUsage)>,
     },
 }
 
@@ -45,7 +45,7 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<J
         return;
     }
 
-    // Volume label lookups are OS calls; cache one per drive letter up front
+    // Volume label/serial lookups are OS calls; cache one per drive letter up front
     // (there's usually only one or two) rather than paying for it per file.
     let mut volumes = HashMap::new();
     for f in &files {
@@ -84,6 +84,7 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<J
                 IndexedFile {
                     volume_label: vol.label.clone(),
                     drive_letter,
+                    volume_serial: vol.serial,
                     rel_path,
                     size: f.size,
                     modified: f.modified,
@@ -94,7 +95,7 @@ pub fn run_index_scan(config: ScanConfig, tx: Sender<IndexEvent>, control: Arc<J
 
     let usage = volumes
         .iter()
-        .filter_map(|(drive, vol)| Some((drive.clone(), vol.label.clone(), volume_usage(drive)?)))
+        .filter_map(|(drive, vol)| Some((vol.clone(), volume_usage(drive)?)))
         .collect();
     let _ = tx.send(IndexEvent::Done {
         entries,

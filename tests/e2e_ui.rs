@@ -14,7 +14,21 @@ use std::fs;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
+/// Points the app's index and drive list at a temp folder for this test
+/// binary, so no test reads or rewrites the real ones in %LOCALAPPDATA%.
+fn isolate_app_data() {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = tempdir().unwrap();
+        // SAFETY: done once, before any app reads it; other tests calling
+        // this wait in `get_or_init` until it's set.
+        unsafe { std::env::set_var("DUPE_RS_DATA_DIR", dir.path()) };
+        dir
+    });
+}
+
 fn harness() -> Harness<'static, DupeApp> {
+    isolate_app_data();
     Harness::builder().build_eframe(|cc| {
         egui_material_icons::initialize(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -361,6 +375,10 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
     harness.state_mut().tab = dupe_rs::app::AppTab::ReverseSearch;
     harness.state_mut().reverse_search =
         dupe_rs::reverse_search::ReverseSearchState::new(db_dir.path().join("index.json"));
+    // Likewise for the drive list, which indexing adds the drive to.
+    let state = harness.state_mut();
+    state.drives =
+        dupe_rs::drives::DrivesState::new(db_dir.path().join("drives.json"), &mut state.reverse_search.db);
     harness.state_mut().reverse_search.index_folders.push(dir.path().to_path_buf());
     harness.run();
 
@@ -377,13 +395,17 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
     harness.run();
 
     assert!(harness.state().reverse_search.db.total_files() >= 1);
-    // The indexed drive's fill level is saved alongside its files.
-    let drive = dupe_rs::volume::drive_letter_of(dir.path());
-    let label = dupe_rs::volume::volume_info(&drive).label;
-    let usage = harness.state().reverse_search.db.usage(&drive, &label).copied();
-    assert!(usage.is_some_and(|u| u.total > 0 && u.used() <= u.total));
+    // The indexed drive is now in the drive list, with its fill level.
+    let volume = dupe_rs::volume::volume_info(&dupe_rs::volume::drive_letter_of(dir.path()));
+    let record = harness.state().drives.registry.get(&volume.key()).cloned().unwrap();
+    assert!(record.usage.is_some_and(|u| u.total > 0 && u.used() <= u.total));
+    assert!(record.last_indexed.is_some());
+    assert!(db_dir.path().join("drives.json").exists());
+    harness.state_mut().tab = AppTab::Drives;
     harness.run();
     assert!(harness.query_by_label_contains("% used").is_some());
+    assert!(harness.query_by_label_contains("file(s)").is_some());
+    harness.state_mut().tab = AppTab::ReverseSearch;
 
     let picked = dir.path().join("picked_copy.txt");
     fs::write(&picked, b"reverse search payload").unwrap();
@@ -395,7 +417,10 @@ fn reverse_search_indexes_a_folder_and_finds_a_match_by_content() {
         std::thread::sleep(Duration::from_millis(10));
     }
     harness.run();
-    assert_eq!(harness.state().reverse_search.results_attached, vec![Some(true)]);
+    assert!(matches!(
+        harness.state().reverse_search.results_presence.as_slice(),
+        [dupe_rs::reverse_search::Presence::At(p)] if p == &indexed
+    ));
 
     assert_eq!(harness.state().reverse_search.results.len(), 1);
     // rel_path is relative to the volume root (not the scanned folder), so
@@ -550,6 +575,7 @@ fn closing_with_results_showing_asks_for_confirmation() {
 fn picker_results_land_where_they_were_requested() {
     use dupe_rs::ui::dialogs::PickPurpose;
     let dir = tempdir().unwrap();
+    isolate_app_data();
     let mut app = DupeApp::default();
     app.play_sounds = false;
     let folder = dir.path().to_path_buf();
@@ -562,6 +588,78 @@ fn picker_results_land_where_they_were_requested() {
     // A cancelled dialog changes nothing.
     app.apply_pick(PickPurpose::FillSource, Vec::new());
     assert!(app.drive_fill.source.is_none());
+}
+
+#[test]
+fn drives_tab_shows_twin_drift_health_and_forgets_a_drive() {
+    use dupe_rs::index_db::IndexedFile;
+    use dupe_rs::smart::{REALLOCATED, SmartAttribute, SmartReport};
+    use dupe_rs::volume::VolumeInfo;
+    use std::time::SystemTime;
+
+    let data = tempdir().unwrap();
+    let mut harness = harness();
+    let a = VolumeInfo {
+        drive_letter: "Y:".into(),
+        label: "Backup A".into(),
+        serial: Some(0xAAAA_0001),
+    };
+    let b = VolumeInfo {
+        drive_letter: "Z:".into(),
+        label: "Backup B".into(),
+        serial: Some(0xBBBB_0002),
+    };
+    let file = |v: &VolumeInfo, rel: &str| IndexedFile {
+        volume_label: v.label.clone(),
+        drive_letter: v.drive_letter.clone(),
+        volume_serial: v.serial,
+        rel_path: rel.into(),
+        size: 1_000,
+        modified: SystemTime::UNIX_EPOCH,
+    };
+    let report = |reallocated| SmartReport {
+        identity: None,
+        attributes: vec![SmartAttribute {
+            id: REALLOCATED,
+            prefail: true,
+            current: 200,
+            worst: 200,
+            threshold: 140,
+            raw: reallocated,
+        }],
+    };
+
+    let state = harness.state_mut();
+    state.reverse_search =
+        dupe_rs::reverse_search::ReverseSearchState::new(data.path().join("index.json"));
+    let db = &mut state.reverse_search.db;
+    db.reindex_volume(&a, vec![
+        ("same".into(), file(&a, "photos/1.jpg")),
+        ("only_a".into(), file(&a, "photos/2.jpg")),
+    ]);
+    db.reindex_volume(&b, vec![("same".into(), file(&b, "moved/1.jpg"))]);
+    state.drives =
+        dupe_rs::drives::DrivesState::new(data.path().join("drives.json"), &mut state.reverse_search.db);
+    let now = SystemTime::now();
+    state.drives.registry.record_health(&a, report(0), now);
+    state.drives.registry.record_health(&a, report(8), now);
+    state.drives.set_twin(&a.key(), Some(&b.key()));
+    state.tab = AppTab::Drives;
+    harness.run();
+
+    assert!(harness.query_by_label_contains("Backup A").is_some());
+    assert!(harness.query_by_label_contains("only on this drive").is_some());
+    assert!(harness.query_by_label_contains("Reallocated: 8").is_some());
+    assert!(harness.query_by_label_contains("up from 0").is_some());
+    assert!(harness.query_by_label_contains("Volume serial AAAA-0001").is_some());
+
+    harness.state_mut().drives.pending_forget = Some(b.key());
+    harness.run();
+    harness.get_by_label("Forget drive").click();
+    harness.run();
+    assert!(harness.state().drives.registry.get(&b.key()).is_none());
+    assert_eq!(harness.state().drives.registry.get(&a.key()).unwrap().twin, None);
+    assert_eq!(harness.state().reverse_search.db.total_files(), 2);
 }
 
 #[test]
