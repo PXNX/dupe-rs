@@ -9,7 +9,7 @@ chrono = "0.4.45"
 crossbeam-channel = "0.5.17"
 eframe = "0.36.2"
 egui = "0.36.2"
-egui_extras = "0.36.2"
+egui_extras = { version = "0.36.2", features = ["svg"] }
 egui_material_icons = { version = "0.8.0", features = ["compressed"] }
 humansize = "2.1.3"
 image = "0.25.10"

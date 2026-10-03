@@ -1,12 +1,40 @@
 use crate::app::{CacheSortColumn, DupeApp};
+use crate::build_cache::CacheKind;
 use crate::ui::controls::sort_header;
 use crate::ui::format::format_timestamp;
-use egui::{Sense, Ui};
+use egui::{Color32, ImageSource, Response, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
+use egui_material_icons::icons;
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
 
 const ROW_HEIGHT: f32 = 22.0;
+const ICON_SIZE: f32 = 14.0;
+
+/// Brand logo for each kind of cache, from Simple Icons (CC0, simpleicons.org)
+/// with each fill set to a color that reads on light and dark themes.
+fn kind_logo(kind: CacheKind) -> Option<ImageSource<'static>> {
+    Some(match kind {
+        CacheKind::Node => egui::include_image!("../../assets/cache_icons/node.svg"),
+        CacheKind::Python => egui::include_image!("../../assets/cache_icons/python.svg"),
+        CacheKind::Rust => egui::include_image!("../../assets/cache_icons/rust.svg"),
+        CacheKind::Gradle => egui::include_image!("../../assets/cache_icons/android.svg"),
+        CacheKind::Maven => egui::include_image!("../../assets/cache_icons/java.svg"),
+        CacheKind::DotNet => egui::include_image!("../../assets/cache_icons/dotnet.svg"),
+        CacheKind::Flutter => egui::include_image!("../../assets/cache_icons/flutter.svg"),
+        // Not one ecosystem, so no brand to show.
+        CacheKind::Tagged => return None,
+    })
+}
+
+/// Shows `kind`'s logo, for the table's Type column and the settings
+/// panel's kind checkboxes.
+pub fn kind_icon(ui: &mut Ui, kind: CacheKind) -> Response {
+    match kind_logo(kind) {
+        Some(logo) => ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))),
+        None => ui.label(icons::ICON_SELL.rich_text().color(Color32::GRAY)),
+    }
+}
 
 /// Flat, sortable list for `ScanMode::BuildCaches`: one row per cache
 /// folder, to review and then select and delete like duplicates. Only rows
@@ -86,6 +114,7 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         .on_hover_text(dir.path.display().to_string());
                 });
                 row.col(|ui| {
+                    kind_icon(ui, dir.kind);
                     ui.label(dir.kind.label());
                 });
                 row.col(|ui| {
@@ -110,5 +139,25 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
         && let Err(err) = open::that(&path)
     {
         app.status_message = Some(format!("Couldn't open {}: {err}", path.display()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_logo_rasterizes_to_visible_pixels() {
+        for kind in CacheKind::ALL {
+            let Some(ImageSource::Bytes { bytes, .. }) = kind_logo(kind) else {
+                continue;
+            };
+            let image = egui_extras::image::load_svg_bytes(&bytes, &Default::default())
+                .unwrap_or_else(|e| panic!("{kind:?} logo: {e}"));
+            assert!(
+                image.pixels.iter().any(|p| p.a() > 0),
+                "{kind:?} logo is blank"
+            );
+        }
     }
 }

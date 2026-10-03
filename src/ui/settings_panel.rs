@@ -26,11 +26,19 @@ fn cache_kind_filters(app: &mut DupeApp, ui: &mut Ui) {
         ui.label("Look for:");
         for kind in CacheKind::ALL {
             let mut on = app.config.cache_kinds.contains(&kind);
+            // The logo sits between the box and its label, so the label is
+            // made clickable to toggle too, like a regular checkbox label.
+            let mut changed = ui.checkbox(&mut on, "").changed();
+            crate::ui::results_table_caches::kind_icon(ui, kind);
             if ui
-                .checkbox(&mut on, kind.label())
+                .add(egui::Label::new(kind.label()).sense(egui::Sense::click()))
                 .on_hover_text(kind.description())
-                .changed()
+                .clicked()
             {
+                on = !on;
+                changed = true;
+            }
+            if changed {
                 if on {
                     app.config.cache_kinds.push(kind);
                 } else {
