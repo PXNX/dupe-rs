@@ -1,0 +1,9 @@
+# Text files are stored and checked out with LF line endings on every
+# platform, whatever core.autocrlf is set to.
+* text=auto eol=lf
+
+*.rs text diff=rust
+*.md text diff=markdown
+
+*.png binary
+*.ico binary
