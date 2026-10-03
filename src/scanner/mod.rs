@@ -23,6 +23,7 @@ pub fn run_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobContr
         ScanMode::ExactContent => run_exact_scan(config, tx, control),
         ScanMode::SimilarMedia => similarity::run_similarity_scan(config, tx, control),
         ScanMode::MatchingFiles => run_match_scan(config, tx, control),
+        ScanMode::BuildCaches => crate::build_cache::run_scan(config, tx, control),
     }
 }
 

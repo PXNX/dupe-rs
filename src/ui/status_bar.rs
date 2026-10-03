@@ -8,7 +8,31 @@ use humansize::{DECIMAL, format_size};
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
     Panel::bottom("status_bar").show(ui, |ui| {
         ui.add_space(2.0);
-        let grouped = app.active_mode != ScanMode::MatchingFiles;
+        let grouped = matches!(
+            app.active_mode,
+            ScanMode::ExactContent | ScanMode::SimilarMedia
+        );
+        if app.active_mode == ScanMode::BuildCaches {
+            ui.horizontal(|ui| {
+                ui.label(icons::ICON_TASK_ALT.rich_text());
+                ui.label("Select caches untouched for at least");
+                ui.add(egui::TextEdit::singleline(&mut app.stale_days_text).desired_width(40.0));
+                ui.label("days");
+                let days = app.stale_days_text.trim().parse::<u64>().ok();
+                if ui
+                    .add_enabled(days.is_some(), egui::Button::new("Apply"))
+                    .on_hover_text(
+                        "Adds every cache folder whose newest file is at least this old to the \
+                         selection, i.e. projects you haven't built in a while.",
+                    )
+                    .clicked()
+                    && let Some(days) = days
+                {
+                    app.select_stale_caches(days);
+                }
+            });
+            ui.add_space(2.0);
+        }
         if grouped {
         ui.horizontal(|ui| {
             ui.label(icons::ICON_TASK_ALT.rich_text());
@@ -68,6 +92,19 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 let selected_size: u64 = selected.iter().map(|f| f.size).sum();
                 (shown_size, files.len(), selected.len(), selected_size)
             }
+            ScanMode::BuildCaches => {
+                let dirs = &app.cache_dirs;
+                let shown_size: u64 = dirs.iter().map(|d| d.size).sum();
+                let selected: Vec<_> =
+                    dirs.iter().filter(|d| app.selection.contains(&d.path)).collect();
+                let selected_size: u64 = selected.iter().map(|d| d.size).sum();
+                (shown_size, dirs.len(), selected.len(), selected_size)
+            }
+        };
+        let noun = if app.active_mode == ScanMode::BuildCaches {
+            "folders"
+        } else {
+            "files"
         };
 
         ui.horizontal(|ui| {
@@ -106,6 +143,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     ScanMode::MatchingFiles => {
                         for f in &app.matched_files {
                             app.selection.insert(f.path.clone());
+                        }
+                    }
+                    ScanMode::BuildCaches => {
+                        for d in &app.cache_dirs {
+                            app.selection.insert(d.path.clone());
                         }
                     }
                 }
@@ -151,13 +193,13 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
 
                 ui.separator();
                 ui.label(format!(
-                    "Shown: {visible_len} files, {}",
+                    "Shown: {visible_len} {noun}, {}",
                     format_size(shown_size, DECIMAL)
                 ));
                 ui.colored_label(
                     egui::Color32::from_rgb(120, 200, 120),
                     format!(
-                        "Selected: {selected_count} files, {}",
+                        "Selected: {selected_count} {noun}, {}",
                         format_size(selected_size, DECIMAL)
                     ),
                 );

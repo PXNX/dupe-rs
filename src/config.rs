@@ -1,3 +1,4 @@
+use crate::build_cache::CacheKind;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -29,6 +30,9 @@ pub enum ScanMode {
     /// Every file passing the size/extension/name filters, duplicate or not,
     /// e.g. to clear out all `.tmp` files or everything under 1 KB.
     MatchingFiles,
+    /// Regenerable build output and dependency folders (`node_modules`,
+    /// venvs, `target`, ...), see `crate::build_cache`.
+    BuildCaches,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +55,8 @@ pub struct ScanConfig {
     /// filter, either a plain substring or a `*`/`?` wildcard pattern
     /// matched against the whole file name. Empty matches everything.
     pub name_filter: String,
+    /// Only used in `ScanMode::BuildCaches`: which kinds of cache to list.
+    pub cache_kinds: Vec<CacheKind>,
 }
 
 impl Default for ScanConfig {
@@ -66,6 +72,7 @@ impl Default for ScanConfig {
             similarity_threshold: 10,
             skip_archives: true,
             name_filter: String::new(),
+            cache_kinds: CacheKind::ALL.to_vec(),
         }
     }
 }

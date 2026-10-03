@@ -15,6 +15,7 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
         return;
     };
     let count = confirm.paths.len();
+    let noun = confirm.noun;
     let size_str = format_size(confirm.total_size, DECIMAL);
 
     let mut do_confirm = false;
@@ -30,13 +31,22 @@ pub fn show(app: &mut DupeApp, ctx: &Context) {
     .show(ctx, |ui| {
         if confirm.permanent {
             ui.label(format!(
-                "Permanently delete {count} file(s) ({size_str})? They will not go to the \
+                "Permanently delete {count} {noun} ({size_str})? They will not go to the \
                  Recycle Bin and cannot be recovered."
             ));
         } else {
             ui.label(format!(
-                "Move {count} file(s) ({size_str}) to the trash? This cannot be undone from within dupe-rs."
+                "Move {count} {noun} ({size_str}) to the trash? This cannot be undone from within dupe-rs."
             ));
+            if noun == "folder(s)" {
+                ui.label(
+                    RichText::new(
+                        "Build caches can be regenerated, and moving folders with many files \
+                         to the Recycle Bin is slow. Deleting them permanently is much faster.",
+                    )
+                    .weak(),
+                );
+            }
         }
         ui.checkbox(
             &mut confirm.permanent,
@@ -101,7 +111,8 @@ fn show_job(ui: &mut egui::Ui, job: &mut DeleteJob) -> bool {
     let mut cancel = false;
     let (done, total) = (job.done, job.total);
     let fraction = if total == 0 { 1.0 } else { done as f32 / total as f32 };
-    ui.add(egui::ProgressBar::new(fraction).text(format!("{done} / {total} files")));
+    let noun = job.noun;
+    ui.add(egui::ProgressBar::new(fraction).text(format!("{done} / {total} {noun}")));
 
     let current = job
         .current

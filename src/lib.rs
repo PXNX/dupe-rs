@@ -1,5 +1,6 @@
 pub mod app;
 pub mod archive;
+pub mod build_cache;
 pub mod config;
 pub mod control;
 pub mod drive_fill;

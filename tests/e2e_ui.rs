@@ -655,3 +655,52 @@ fn matching_files_mode_finds_files_by_filter_and_deletes_them() {
     assert!(keep.exists());
     assert!(harness.state().matched_files.is_empty());
 }
+
+#[test]
+fn build_caches_mode_lists_cache_folders_and_deletes_them_whole() {
+    use dupe_rs::config::ScanMode;
+    let dir = tempdir().unwrap();
+    let project = dir.path().join("site");
+    let modules = project.join("node_modules");
+    let venv = dir.path().join("tool/.venv");
+    fs::create_dir_all(modules.join("dep")).unwrap();
+    fs::create_dir_all(&venv).unwrap();
+    fs::write(modules.join("dep/index.js"), b"module.exports = 1").unwrap();
+    fs::write(venv.join("pyvenv.cfg"), b"home = python").unwrap();
+    fs::write(project.join("package.json"), b"{}").unwrap();
+    // A plain folder named like a build output, with no project file next to it.
+    fs::create_dir_all(dir.path().join("photos/build")).unwrap();
+
+    let mut harness = harness();
+    {
+        let app = harness.state_mut();
+        app.config.folders.push(dir.path().to_path_buf());
+        app.config.mode = ScanMode::BuildCaches;
+    }
+    harness.run();
+    assert!(harness.query_by_label_contains("Look for:").is_some());
+    click_scan_button(&harness);
+    wait_for_scan_done(&mut harness);
+    harness.run();
+
+    let mut found: Vec<_> = harness.state().cache_dirs.iter().map(|d| d.path.clone()).collect();
+    found.sort();
+    assert_eq!(found, vec![modules.clone(), venv.clone()]);
+    assert!(harness.query_by_label("node_modules").is_some(), "shown in the table");
+
+    harness.get_by_label_contains("Select All Shown").click();
+    harness.step();
+    harness.key_press(egui::Key::Delete);
+    harness.step();
+    harness.state_mut().delete_confirm.as_mut().unwrap().permanent = true;
+    harness.run();
+    harness.get_by_label("Delete").click();
+    harness.step();
+    wait_for_delete_done(&mut harness);
+    harness.run();
+
+    assert!(!modules.exists() && !venv.exists());
+    assert!(project.join("package.json").exists());
+    assert!(dir.path().join("photos/build").exists());
+    assert!(harness.state().cache_dirs.is_empty());
+}

@@ -26,6 +26,10 @@ assets/screenshot.png.
   [ffmpeg](https://ffmpeg.org/) on `PATH` to compare videos.
 - **Remove by filter** — list every file matching size, extension, and name filters
   (`*.tmp`, `IMG_????.jpg`, empty files...), then delete them like duplicates.
+- **Build caches** — find regenerable build output and dependency folders (`node_modules`,
+  Python venvs, Rust/Maven `target`, Gradle/Android `build`, `.vercel/output`, .NET
+  `bin`/`obj`, ...), review them in a sortable table with sizes and last-built dates, and
+  delete them. Generic names like `build` or `target` only count next to their project file.
 - **Split archives stay intact** — RAR and split-archive volumes are skipped by duplicate
   scans by default, since deleting one part breaks the whole set.
 - **Copy-named filter** — narrow results to duplicates whose filename looks like an

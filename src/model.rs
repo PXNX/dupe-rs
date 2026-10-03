@@ -1,3 +1,4 @@
+use crate::build_cache::CacheKind;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -37,6 +38,19 @@ pub struct SimilarGroup {
     pub files: Vec<MediaEntry>,
 }
 
+/// A build-cache folder found by `ScanMode::BuildCaches`, with totals for
+/// everything inside it.
+#[derive(Clone, Debug)]
+pub struct CacheDir {
+    pub path: PathBuf,
+    pub kind: CacheKind,
+    pub size: u64,
+    pub file_count: u64,
+    /// Newest modification time of the folder or anything in it, i.e. roughly
+    /// when the project was last built.
+    pub modified: SystemTime,
+}
+
 #[derive(Clone, Debug)]
 pub enum ScanEvent {
     Progress {
@@ -55,6 +69,8 @@ pub enum ScanEvent {
     SimilarGroupFound(SimilarGroup),
     /// A batch of files found by `ScanMode::MatchingFiles`.
     FilesMatched(Vec<FileEntry>),
+    /// Cache folders found (and sized) by `ScanMode::BuildCaches`.
+    CachesFound(Vec<CacheDir>),
     Done {
         elapsed_ms: u128,
     },

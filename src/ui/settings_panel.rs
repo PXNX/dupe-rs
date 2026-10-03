@@ -1,4 +1,5 @@
 use crate::app::{DupeApp, ExtensionMode, HashProgress, ScanState, ViewMode};
+use crate::build_cache::CacheKind;
 use crate::config::{ScanMode, SizeUnit};
 use egui::{Align, Layout, Panel, RichText, Ui};
 use egui_material_icons::icons;
@@ -15,6 +16,29 @@ fn hash_progress_text(progress: &HashProgress) -> String {
         }
         None => format!("Hashed {done} / {total} — estimating..."),
     }
+}
+
+/// The build-cache mode's stand-in for the extension/name filters: which
+/// kinds of cache to look for.
+fn cache_kind_filters(app: &mut DupeApp, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(icons::ICON_FILTER.rich_text());
+        ui.label("Look for:");
+        for kind in CacheKind::ALL {
+            let mut on = app.config.cache_kinds.contains(&kind);
+            if ui
+                .checkbox(&mut on, kind.label())
+                .on_hover_text(kind.description())
+                .changed()
+            {
+                if on {
+                    app.config.cache_kinds.push(kind);
+                } else {
+                    app.config.cache_kinds.retain(|k| *k != kind);
+                }
+            }
+        }
+    });
 }
 
 pub fn show(app: &mut DupeApp, ui: &mut Ui) {
@@ -74,6 +98,13 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 "Every file that passes the size, extension, and name filters, duplicate or \
                  not, to clear out e.g. all .tmp files or everything under 1 KB.",
             );
+            ui.radio_value(&mut app.config.mode, ScanMode::BuildCaches, "Build caches")
+                .on_hover_text(
+                    "Regenerable build output and dependency folders (node_modules, Python \
+                     venvs, Rust/Maven target, Gradle build, .NET bin/obj, ...), to review \
+                     and remove. Generic names like build or target only count next to their \
+                     project file.",
+                );
             if app.config.mode == ScanMode::SimilarMedia {
                 ui.separator();
                 ui.label("Similarity:");
@@ -101,11 +132,13 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     {
                         app.start_pick(crate::ui::dialogs::PickPurpose::ScanFolders);
                     }
-                    ui.separator();
-                    ui.checkbox(&mut app.config.exclude_subfolders, "This folder only")
-                        .on_hover_text("Don't descend into subfolders — scan only the top level of each added folder.");
-                    ui.checkbox(&mut app.config.same_folder_only, "Same folder only")
-                        .on_hover_text("Only mark files as duplicates if they live in the same folder as each other; cross-folder matches are ignored.");
+                    if app.config.mode != ScanMode::BuildCaches {
+                        ui.separator();
+                        ui.checkbox(&mut app.config.exclude_subfolders, "This folder only")
+                            .on_hover_text("Don't descend into subfolders — scan only the top level of each added folder.");
+                        ui.checkbox(&mut app.config.same_folder_only, "Same folder only")
+                            .on_hover_text("Only mark files as duplicates if they live in the same folder as each other; cross-folder matches are ignored.");
+                    }
                 });
 
                 let mut remove_index = None;
@@ -145,7 +178,14 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                 ui.selectable_value(&mut app.size_unit, unit, unit.label());
                             }
                         });
+                    if app.config.mode == ScanMode::BuildCaches {
+                        ui.label("(per folder)");
+                    }
                 });
+                if app.config.mode == ScanMode::BuildCaches {
+                    cache_kind_filters(app, ui);
+                    return;
+                }
                 ui.horizontal(|ui| {
                     ui.label(icons::ICON_FILTER.rich_text());
                     ui.label("Extensions:");
@@ -236,6 +276,9 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                     }
                     match hash_progress {
                         Some(progress) => ui.label(hash_progress_text(progress)),
+                        None if app.active_mode == ScanMode::BuildCaches => {
+                            ui.label(format!("Checked {scanned} files and folders..."))
+                        }
                         None => ui.label(format!("Scanned {scanned} files...")),
                     };
                 }

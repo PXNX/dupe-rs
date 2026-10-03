@@ -2,7 +2,9 @@ use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_exten
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
 use crate::drive_fill::DriveFillState;
 use crate::flatten::FlattenState;
-use crate::model::{DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup};
+use crate::model::{
+    CacheDir, DeleteEvent, DupeGroup, FileEntry, MediaEntry, ScanEvent, SimilarGroup,
+};
 use crate::reencode::ReencodeState;
 use crate::reverse_search::ReverseSearchState;
 use crate::scanner;
@@ -63,6 +65,8 @@ pub struct DeleteJob {
     pub skipped: usize,
     /// Whether files are removed outright rather than moved to the trash.
     pub permanent: bool,
+    /// What's being deleted, "file(s)" or "folder(s)", for progress text.
+    pub noun: &'static str,
     clock: ActiveClock,
     /// The file the worker is on right now, for the progress readout.
     pub current: Option<PathBuf>,
@@ -137,6 +141,17 @@ pub enum SortColumn {
     Modified,
 }
 
+/// Columns of the build-cache table (`ScanMode::BuildCaches`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheSortColumn {
+    Name,
+    Project,
+    Kind,
+    Size,
+    Files,
+    Modified,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {
     Asc,
@@ -189,6 +204,8 @@ pub struct DeleteConfirmState {
     /// Bound to the dialog's "skip the Recycle Bin" checkbox. Always starts
     /// unticked so the default stays the recoverable trash move.
     pub permanent: bool,
+    /// "file(s)" or "folder(s)", for the dialog text.
+    pub noun: &'static str,
 }
 
 /// Shared by `FileEntry` and `MediaEntry` so `select_by_criterion` can pick a
@@ -260,6 +277,15 @@ pub struct DupeApp {
     /// Display order of `matched_files` for the current sort, rebuilt only
     /// when the files or the sort change.
     matched_order: (u64, Option<(SortColumn, SortDirection)>, Vec<usize>),
+    /// Results of a `ScanMode::BuildCaches` scan.
+    pub cache_dirs: Vec<CacheDir>,
+    /// Bumped whenever `cache_dirs` changes; keys `cache_order`.
+    cache_generation: u64,
+    pub cache_sort: Option<(CacheSortColumn, SortDirection)>,
+    /// Display order of `cache_dirs`, rebuilt only when they or the sort change.
+    cache_order: (u64, Option<(CacheSortColumn, SortDirection)>, Vec<usize>),
+    /// Bound to the status bar's "untouched for N days" box.
+    pub stale_days_text: String,
     /// Bumped every time `groups` is mutated (new group found, groups pruned
     /// after a delete, scan restarted). `exact_rows_cache` is keyed on this
     /// so it only rebuilds when the underlying data actually changed, rather
@@ -319,6 +345,11 @@ impl Default for DupeApp {
             matched_files: Vec::new(),
             matched_generation: 0,
             matched_order: (u64::MAX, None, Vec::new()),
+            cache_dirs: Vec::new(),
+            cache_generation: 0,
+            cache_sort: Some((CacheSortColumn::Size, SortDirection::Desc)),
+            cache_order: (u64::MAX, None, Vec::new()),
+            stale_days_text: "30".to_owned(),
             groups_generation: 0,
             exact_rows_cache: ExactRowsCache::default(),
             active_mode: ScanMode::ExactContent,
@@ -375,6 +406,8 @@ impl DupeApp {
         self.similar_groups.clear();
         self.matched_files.clear();
         self.matched_generation += 1;
+        self.cache_dirs.clear();
+        self.cache_generation += 1;
         self.groups_generation += 1;
         self.active_mode = self.config.mode;
         self.selection.clear();
@@ -469,6 +502,10 @@ impl DupeApp {
                         self.matched_files.extend(files);
                         self.matched_generation += 1;
                     }
+                    ScanEvent::CachesFound(dirs) => {
+                        self.cache_dirs.extend(dirs);
+                        self.cache_generation += 1;
+                    }
                     ScanEvent::Done { elapsed_ms } => {
                         cancelled = control.is_cancelled();
                         let paused_ms = clock.paused_total().as_millis();
@@ -517,7 +554,49 @@ impl DupeApp {
             .map(|f| f.path.clone())
             .collect(),
             ScanMode::MatchingFiles => self.matched_files.iter().map(|f| f.path.clone()).collect(),
+            ScanMode::BuildCaches => self.cache_dirs.iter().map(|d| d.path.clone()).collect(),
         };
+    }
+
+    /// Indices into `cache_dirs` in the table's sort order (cached).
+    pub fn cache_order(&mut self) -> &[usize] {
+        if self.cache_order.0 != self.cache_generation || self.cache_order.1 != self.cache_sort {
+            let dirs = &self.cache_dirs;
+            let mut order: Vec<usize> = (0..dirs.len()).collect();
+            if let Some((column, direction)) = self.cache_sort {
+                order.sort_by(|&a, &b| {
+                    let (da, db) = (&dirs[a], &dirs[b]);
+                    let ord = match column {
+                        CacheSortColumn::Name => da.path.file_name().cmp(&db.path.file_name()),
+                        CacheSortColumn::Project => da.path.cmp(&db.path),
+                        CacheSortColumn::Kind => da.kind.label().cmp(db.kind.label()),
+                        CacheSortColumn::Size => da.size.cmp(&db.size),
+                        CacheSortColumn::Files => da.file_count.cmp(&db.file_count),
+                        CacheSortColumn::Modified => da.modified.cmp(&db.modified),
+                    };
+                    match direction {
+                        SortDirection::Asc => ord,
+                        SortDirection::Desc => ord.reverse(),
+                    }
+                });
+            }
+            self.cache_order = (self.cache_generation, self.cache_sort, order);
+        }
+        &self.cache_order.2
+    }
+
+    /// Selects every cache folder nothing inside of has changed in for at
+    /// least `days` days, i.e. projects that haven't been built in a while.
+    pub fn select_stale_caches(&mut self, days: u64) {
+        let Some(cutoff) = SystemTime::now().checked_sub(Duration::from_secs(days * 24 * 60 * 60))
+        else {
+            return;
+        };
+        for dir in &self.cache_dirs {
+            if dir.modified <= cutoff {
+                self.selection.insert(dir.path.clone());
+            }
+        }
     }
 
     /// Indices into `matched_files` in the table's sort order (cached).
@@ -563,7 +642,7 @@ impl DupeApp {
                 }
             }
             // No groups to pick within.
-            ScanMode::MatchingFiles => {}
+            ScanMode::MatchingFiles | ScanMode::BuildCaches => {}
         }
     }
 
@@ -603,11 +682,23 @@ impl DupeApp {
                 .filter(|f| wanted.contains(&f.path))
                 .map(|f| f.size)
                 .sum(),
+            ScanMode::BuildCaches => self
+                .cache_dirs
+                .iter()
+                .filter(|d| wanted.contains(&d.path))
+                .map(|d| d.size)
+                .sum(),
+        };
+        let noun = if self.active_mode == ScanMode::BuildCaches {
+            "folder(s)"
+        } else {
+            "file(s)"
         };
         self.delete_confirm = Some(DeleteConfirmState {
             paths,
             total_size,
             permanent: false,
+            noun,
         });
     }
 
@@ -628,6 +719,7 @@ impl DupeApp {
         };
         let total = confirm.paths.len();
         let permanent = confirm.permanent;
+        let noun = confirm.noun;
         let queued: HashSet<PathBuf> = confirm.paths.iter().cloned().collect();
         self.selection.retain(|p| !queued.contains(p));
 
@@ -641,7 +733,9 @@ impl DupeApp {
                 }
                 let _ = tx.send(DeleteEvent::FileStarted { path: path.clone() });
                 let deleted = path.exists()
-                    && if permanent {
+                    && if permanent && path.is_dir() {
+                        std::fs::remove_dir_all(&path).is_ok()
+                    } else if permanent {
                         std::fs::remove_file(&path).is_ok()
                     } else {
                         trash::delete(&path).is_ok()
@@ -663,6 +757,7 @@ impl DupeApp {
             deleted_paths: HashSet::new(),
             skipped: 0,
             permanent,
+            noun,
             clock: ActiveClock::start(),
             current: None,
         });
@@ -712,6 +807,7 @@ impl DupeApp {
             deleted_paths,
             skipped,
             permanent,
+            noun,
             ..
         } = job;
         for group in &mut self.groups {
@@ -725,6 +821,8 @@ impl DupeApp {
         self.similar_groups.retain(|g| g.files.len() > 1);
         self.matched_files.retain(|f| !deleted_paths.contains(&f.path));
         self.matched_generation += 1;
+        self.cache_dirs.retain(|d| !deleted_paths.contains(&d.path));
+        self.cache_generation += 1;
         self.selection.retain(|p| !deleted_paths.contains(p));
 
         if self.play_sounds {
@@ -739,10 +837,10 @@ impl DupeApp {
         let destination = if permanent { "" } else { " to the trash" };
         let prefix = if cancelled { "Delete cancelled. " } else { "" };
         self.status_message = Some(if skipped == 0 {
-            format!("{prefix}{action} {} file(s){destination}.", deleted_paths.len())
+            format!("{prefix}{action} {} {noun}{destination}.", deleted_paths.len())
         } else {
             format!(
-                "{prefix}{action} {} file(s){destination}; skipped {} (missing or failed).",
+                "{prefix}{action} {} {noun}{destination}; skipped {} (missing or failed).",
                 deleted_paths.len(),
                 skipped
             )
@@ -826,6 +924,7 @@ impl DupeApp {
             || !self.groups.is_empty()
             || !self.similar_groups.is_empty()
             || !self.matched_files.is_empty()
+            || !self.cache_dirs.is_empty()
     }
 
     /// Carries out an action the user just confirmed in the dialog.
@@ -1073,6 +1172,7 @@ impl eframe::App for DupeApp {
             egui::CentralPanel::default().show(ui, |ui| match self.active_mode {
                 ScanMode::SimilarMedia => crate::ui::results_table_similar::show(self, ui),
                 ScanMode::MatchingFiles => crate::ui::results_table_matched::show(self, ui),
+                ScanMode::BuildCaches => crate::ui::results_table_caches::show(self, ui),
                 ScanMode::ExactContent => match self.view_mode {
                     ViewMode::Table => crate::ui::results_table::show(self, ui),
                     ViewMode::Grid => crate::ui::results_grid::show(self, ui),
