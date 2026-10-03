@@ -1,5 +1,6 @@
 use crate::config::{ExtensionFilter, ScanConfig, ScanMode, SizeUnit, parse_extension_list};
 use crate::control::{ActiveClock, JobControl, estimate_remaining};
+use crate::disk_usage::DiskUsageState;
 use crate::drive_fill::DriveFillState;
 use crate::flatten::FlattenState;
 use crate::model::{
@@ -130,6 +131,7 @@ pub enum AppTab {
     DriveFill,
     Reencode,
     Flatten,
+    DiskUsage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,6 +323,7 @@ pub struct DupeApp {
     pub drive_fill: DriveFillState,
     pub reencode: ReencodeState,
     pub flatten: FlattenState,
+    pub disk_usage: DiskUsageState,
 
     pub taskbar: Taskbar,
     /// Whether to play a chime when a scan or delete finishes.
@@ -374,6 +377,7 @@ impl Default for DupeApp {
             drive_fill: DriveFillState::default(),
             reencode: ReencodeState::default(),
             flatten: FlattenState::default(),
+            disk_usage: DiskUsageState::default(),
 
             taskbar: Taskbar::default(),
             play_sounds: true,
@@ -888,6 +892,11 @@ impl DupeApp {
                     self.flatten.set_root(p);
                 }
             }
+            PickPurpose::DiskUsageRoot => {
+                if let Some(p) = paths.into_iter().next() {
+                    self.disk_usage.set_root(p);
+                }
+            }
         }
     }
 
@@ -913,6 +922,9 @@ impl DupeApp {
         }
         if self.flatten.is_running() {
             running.push("moving files (flatten)");
+        }
+        if self.disk_usage.is_scanning() {
+            running.push("measuring disk usage");
         }
         running
     }
@@ -1123,6 +1135,15 @@ impl eframe::App for DupeApp {
             }
         }
 
+        if self.disk_usage.needs_polling() {
+            if self.disk_usage.drain_events() {
+                ctx.request_repaint();
+            }
+            if self.disk_usage.needs_polling() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
         if self.reencode.is_running() {
             let changed = self.reencode.drain_events();
             if changed {
@@ -1183,6 +1204,7 @@ impl eframe::App for DupeApp {
                 AppTab::DriveFill => crate::ui::drive_fill_panel::show(self, ui),
                 AppTab::Reencode => crate::ui::reencode_panel::show(self, ui),
                 AppTab::Flatten => crate::ui::flatten_panel::show(self, ui),
+                AppTab::DiskUsage => crate::ui::disk_usage_panel::show(self, ui),
                 _ => crate::ui::reverse_search_panel::show(self, ui),
             });
         }

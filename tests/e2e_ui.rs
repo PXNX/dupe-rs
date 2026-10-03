@@ -705,3 +705,35 @@ fn build_caches_mode_lists_cache_folders_and_deletes_them_whole() {
     assert!(dir.path().join("photos/build").exists());
     assert!(harness.state().cache_dirs.is_empty());
 }
+
+#[test]
+fn disk_usage_tab_lists_folders_by_size_and_expands_them() {
+    use dupe_rs::ui::dialogs::PickPurpose;
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("photos/2024")).unwrap();
+    fs::create_dir(dir.path().join("docs")).unwrap();
+    fs::write(dir.path().join("photos/2024/a.jpg"), vec![0u8; 3000]).unwrap();
+    fs::write(dir.path().join("docs/b.txt"), vec![0u8; 1000]).unwrap();
+
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label_contains("Disk Usage").click();
+    harness.run();
+    assert_eq!(harness.state().tab, AppTab::DiskUsage);
+
+    harness.state_mut().apply_pick(PickPurpose::DiskUsageRoot, vec![dir.path().to_path_buf()]);
+    let start = Instant::now();
+    while harness.state().disk_usage.needs_polling() {
+        harness.step();
+        assert!(start.elapsed() < Duration::from_secs(10), "measuring timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    harness.run();
+
+    assert!(harness.query_by_label_contains("4 kB").is_some());
+    assert!(harness.query_by_label_contains("75.0 %").is_some());
+    assert!(harness.query_by_label_contains("2024").is_none());
+    harness.get_by_label_contains("photos").click();
+    harness.run();
+    assert!(harness.query_by_label_contains("2024").is_some());
+}

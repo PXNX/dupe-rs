@@ -33,6 +33,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                 AppTab::Flatten,
                 format!("{} Flatten", icons::ICON_DRIVE_FILE_MOVE.codepoint),
             );
+            ui.selectable_value(
+                &mut app.tab,
+                AppTab::DiskUsage,
+                format!("{} Disk Usage", icons::ICON_PIE_CHART.codepoint),
+            );
         });
         ui.add_space(2.0);
     });

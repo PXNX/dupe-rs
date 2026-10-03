@@ -2,6 +2,7 @@ pub mod confirm_dialog;
 pub mod controls;
 pub mod delete_confirm;
 pub mod dialogs;
+pub mod disk_usage_panel;
 pub mod drive_fill_panel;
 pub mod flatten_panel;
 pub mod format;

@@ -47,6 +47,8 @@ assets/screenshot.png.
 - **Flatten** — move every file out of a folder's subfolders into the folder itself,
   renaming name clashes Windows-style (`name (2).ext`) and keeping split-archive sets
   consistent, with a preview first and one-step undo.
+- **Disk usage** — total up every folder and subfolder of a chosen folder and browse
+  them as a tree sorted by size, with each folder's share of its parent.
 - **Re-encode** — shrink PNG/BMP/TIFF/... images losslessly (lossless WebP or
   max-compression PNG, verified pixel for pixel), and with ffmpeg on `PATH` re-encode
   lossless-codec videos to FFV1, or optionally everything to visually lossless H.265.

@@ -3,6 +3,7 @@ pub mod archive;
 pub mod build_cache;
 pub mod config;
 pub mod control;
+pub mod disk_usage;
 pub mod drive_fill;
 pub mod flatten;
 pub mod index_db;
