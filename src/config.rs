@@ -51,6 +51,10 @@ pub struct ScanConfig {
     /// `crate::archive`): deleting one part of a set as "a duplicate" breaks
     /// the whole set.
     pub skip_archives: bool,
+    /// Only used in `ScanMode::ExactContent`: pair GandCrab `.KRAB` files
+    /// with their unencrypted originals (see `crate::krab`), so the
+    /// encrypted copies can be removed like duplicates.
+    pub match_krab_leftovers: bool,
     /// Only used in `ScanMode::MatchingFiles`: a case-insensitive name
     /// filter, either a plain substring or a `*`/`?` wildcard pattern
     /// matched against the whole file name. Empty matches everything.
@@ -71,6 +75,7 @@ impl Default for ScanConfig {
             mode: ScanMode::ExactContent,
             similarity_threshold: 10,
             skip_archives: true,
+            match_krab_leftovers: true,
             name_filter: String::new(),
             cache_kinds: CacheKind::ALL.to_vec(),
         }

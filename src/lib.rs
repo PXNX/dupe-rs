@@ -7,6 +7,7 @@ pub mod disk_usage;
 pub mod drive_fill;
 pub mod flatten;
 pub mod index_db;
+pub mod krab;
 pub mod metadata_backup;
 pub mod model;
 pub mod namematch;

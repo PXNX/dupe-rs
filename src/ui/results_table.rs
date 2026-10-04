@@ -86,7 +86,11 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                         egui::RichText::new(name)
                     };
                     let response = ui.add(egui::Label::new(text).sense(Sense::click()));
-                    let response = response.on_hover_text(format!("hash: {}", hex_prefix(&info.hash)));
+                    let response = if crate::krab::is_krab(&info.path) {
+                        response.on_hover_text("Encrypted .KRAB copy of the original, matched by name and size")
+                    } else {
+                        response.on_hover_text(format!("hash: {}", hex_prefix(&info.hash)))
+                    };
                     if response.double_clicked() {
                         open_path = Some(info.path.clone());
                     }

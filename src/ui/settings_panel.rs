@@ -232,6 +232,18 @@ pub fn show(app: &mut DupeApp, ui: &mut Ui) {
                                  as a duplicate breaks the whole set.",
                             );
                     });
+                    if app.config.mode == ScanMode::ExactContent {
+                        ui.horizontal(|ui| {
+                            ui.label(icons::ICON_LOCK.rich_text());
+                            ui.checkbox(
+                                &mut app.config.match_krab_leftovers,
+                                "Encrypted .KRAB copies of originals",
+                            )
+                            .on_hover_text(
+                                "Treat a GandCrab ransomware file (name.ext.KRAB) as a duplicate                                  of name.ext when that original exists and has exactly the size                                  recorded in the encrypted file. The original is kept; the                                  encrypted copy is offered for deletion.",
+                            );
+                        });
+                    }
                 }
             });
         });

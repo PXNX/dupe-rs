@@ -193,7 +193,11 @@ fn show_hover(ui: &mut Ui, entry: &GridEntry) {
     ui.label(format!("Size: {}", format_size(entry.size, DECIMAL)));
     ui.label(format!("Created: {}", format_timestamp(entry.created)));
     ui.label(format!("Modified: {}", format_timestamp(entry.modified)));
-    ui.label(format!("Hash: {}", hex_prefix(&entry.hash)));
+    if crate::krab::is_krab(&entry.path) {
+        ui.label("Encrypted .KRAB copy of the original, matched by name and size");
+    } else {
+        ui.label(format!("Hash: {}", hex_prefix(&entry.hash)));
+    }
 }
 
 fn draw_generic_icon(ui: &mut Ui, size: f32, icon: MaterialIcon) {

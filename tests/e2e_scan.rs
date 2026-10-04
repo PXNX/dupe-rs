@@ -211,3 +211,30 @@ fn rar_and_split_archive_volumes_are_skipped_unless_asked_for() {
     });
     assert_eq!(groups.len(), 5);
 }
+
+#[test]
+fn krab_files_pair_with_their_originals_unless_disabled() {
+    let dir = tempdir().unwrap();
+    let d = dir.path();
+    fs::create_dir(d.join("encrypted")).unwrap();
+    fs::write(d.join("video.mp4"), vec![7u8; 1000]).unwrap();
+    // GandCrab v4 layout: ciphertext, 512 bytes of wrapped key/nonce, original size.
+    let mut krab = vec![0x5Au8; 1000 + 512];
+    krab.extend_from_slice(&1000u64.to_le_bytes());
+    fs::write(d.join("encrypted/video.mp4.KRAB"), &krab).unwrap();
+    fs::write(d.join("encrypted/orphan.jpg.KRAB"), &krab).unwrap();
+
+    let groups = scan(config_for(d));
+    assert_eq!(groups.len(), 1);
+    assert!(groups[0].files[0].path.ends_with("video.mp4"));
+    assert_eq!(groups[0].files.len(), 2);
+    assert!(groups[0].files[1].path.ends_with("video.mp4.KRAB"));
+
+    let groups = scan(ScanConfig {
+        match_krab_leftovers: false,
+        ..config_for(d)
+    });
+    // Without the pairing, only the two byte-identical .KRAB files match.
+    assert_eq!(groups.len(), 1);
+    assert!(groups[0].files.iter().all(|f| dupe_rs::krab::is_krab(&f.path)));
+}

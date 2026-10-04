@@ -4,6 +4,7 @@ pub mod indexer;
 mod similarity;
 mod walk;
 
+pub use group::sort_group_original;
 pub use hash::full_hash;
 
 use crate::config::{ScanConfig, ScanMode};
@@ -53,6 +54,16 @@ fn run_exact_scan(config: ScanConfig, tx: Sender<ScanEvent>, control: Arc<JobCon
         });
         return;
     }
+
+    let candidates = if config.match_krab_leftovers {
+        let (krab_groups, rest) = crate::krab::match_leftovers(candidates, config.same_folder_only);
+        for group in krab_groups {
+            let _ = tx.send(ScanEvent::GroupFound(group));
+        }
+        rest
+    } else {
+        candidates
+    };
 
     let by_size = group::group_by_size(candidates);
     let sized_dupes: Vec<Vec<FileEntry>> = by_size.into_values().filter(|v| v.len() > 1).collect();
